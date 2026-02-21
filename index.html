@@ -15,7 +15,7 @@
       --r: 14px;
 
       /* Sidebar width (resizable) */
-      --sidebar-w: 22rem;
+      --sidebar-w: 18rem;
       --splitter-w: 10px;
     }
     *{ box-sizing:border-box; }
@@ -28,6 +28,9 @@
       padding: 12px 16px;
       border-bottom: 1px solid var(--bd);
       background: rgba(127,127,127,.04);
+      position: sticky;
+      top: 0;
+      z-index: 20;
     }
     header .brand{ font-weight: 800; letter-spacing:.2px; }
     header .toolbar{ margin-left:auto; display:flex; gap:.5rem; flex-wrap:wrap; }
@@ -64,8 +67,17 @@
     }
     .banner strong{ font-weight: 800; }
 
-    main{
-      padding: 16px;
+    main{ padding: 16px; }
+
+    .dashboardRibbon{
+      margin: 12px 16px 0 16px;
+      display:grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .dashboardRibbon .card{
+      margin: 0;
+      padding: 12px;
     }
 
     /* LAYOUT: sidebar | splitter | content */
@@ -209,6 +221,9 @@
     }
     .sidebarCollapsed .sidebar{ display:none; }
 
+    .customTextWrap{ margin-top: 10px; }
+    .customTextWrap textarea{ width:100%; min-height: 140px; resize: vertical; }
+
     /* Accessibilità: riduci motion */
     @media (prefers-reduced-motion: reduce){
       *{ scroll-behavior:auto !important; transition:none !important; animation:none !important; }
@@ -236,30 +251,52 @@
   Verifica impostazioni Brave (es. “Forget me when I close this site”) e permessi storage.
 </div>
 
+<section class="dashboardRibbon" aria-label="Dashboard">
+  <section class="card">
+    <h2>Utenti</h2>
+    <div class="row">
+      <div class="field">
+        <label for="userSelect">Seleziona</label>
+        <select id="userSelect"></select>
+      </div>
+      <button id="btnDeleteUser" class="danger" title="Elimina utente selezionato">Elimina</button>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <div class="field">
+        <label for="newUserName">Nuovo utente</label>
+        <input id="newUserName" placeholder="Es. Luca" />
+      </div>
+      <button id="btnAddUser" class="primary">Crea</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Sync (opzionale)</h2>
+    <div class="row">
+      <div class="field">
+        <label for="syncUrl">Server URL</label>
+        <input id="syncUrl" placeholder="Es. http://localhost:8787" />
+      </div>
+      <div class="field">
+        <label for="syncEmail">Email</label>
+        <input id="syncEmail" placeholder="demo@example.com" />
+      </div>
+      <div class="field">
+        <label for="syncPassword">Password</label>
+        <input id="syncPassword" type="password" placeholder="demo" />
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <button id="btnLogin">Login</button>
+      <button id="btnSyncNow">Sync now</button>
+      <span class="muted" id="syncStatus">—</span>
+    </div>
+  </section>
+</section>
+
 <main>
   <div id="app" class="layout">
     <aside class="sidebar" aria-label="Pannello laterale">
-      <section class="card">
-        <h2>Utenti</h2>
-        <div class="row">
-          <div class="field">
-            <label for="userSelect">Seleziona</label>
-            <select id="userSelect"></select>
-          </div>
-          <button id="btnDeleteUser" class="danger" title="Elimina utente selezionato">Elimina</button>
-        </div>
-        <div class="row" style="margin-top:10px;">
-          <div class="field">
-            <label for="newUserName">Nuovo utente</label>
-            <input id="newUserName" placeholder="Es. Luca" />
-          </div>
-          <button id="btnAddUser" class="primary">Crea</button>
-        </div>
-        <div class="muted" style="margin-top:10px;">
-          Se i profili “spariscono”, controlla se Brave ha attivo <code>Forget me when I close this site</code>.
-        </div>
-      </section>
-
       <section class="card">
         <h2>Allenamento</h2>
 
@@ -289,6 +326,7 @@
               <option value="wikipediaSummary">Wikipedia (summary)</option>
               <option value="wikipediaExtracts">Wikipedia (extracts plaintext)</option>
               <option value="offline">Offline (testo interno)</option>
+              <option value="custom">Testo incollato dall'utente</option>
             </select>
           </div>
 
@@ -298,11 +336,17 @@
           </div>
         </div>
 
+        <div id="customTextWrap" class="customTextWrap" hidden>
+          <label for="customTextInput">Testo personalizzato (incolla qui da editor/appunti)</label>
+          <textarea id="customTextInput" placeholder="Incolla qui il testo che vuoi usare per l'esercizio..."></textarea>
+          <div class="muted">Il testo resta locale nel browser e non viene inviato a servizi esterni.</div>
+        </div>
+
         <div class="row" style="margin-top:10px;">
           <div class="field">
             <label for="goalMode">Difficoltà</label>
             <select id="goalMode">
-              <option value="auto">Auto (scala su risultati)</option>
+              <option value="auto">Auto (calcolata dal software)</option>
               <option value="manual">Manuale</option>
             </select>
           </div>
@@ -333,34 +377,6 @@
         <div class="muted wrap-anywhere" style="margin-top:10px;">
           <div><b>Attribuzione:</b> <span id="attribution">—</span></div>
           <div><b>Testo cache:</b> <span id="cacheInfo">—</span></div>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Sync (opzionale)</h2>
-        <div class="row">
-          <div class="field">
-            <label for="syncUrl">Server URL</label>
-            <input id="syncUrl" placeholder="Es. http://localhost:8787" />
-          </div>
-        </div>
-        <div class="row" style="margin-top:10px;">
-          <div class="field">
-            <label for="syncEmail">Email</label>
-            <input id="syncEmail" placeholder="demo@example.com" />
-          </div>
-          <div class="field">
-            <label for="syncPassword">Password</label>
-            <input id="syncPassword" type="password" placeholder="demo" />
-          </div>
-        </div>
-        <div class="row" style="margin-top:10px;">
-          <button id="btnLogin">Login</button>
-          <button id="btnSyncNow">Sync now</button>
-          <span class="muted" id="syncStatus">—</span>
-        </div>
-        <div class="muted" style="margin-top:10px;">
-          Il sync usa REST + JWT (demo) e push append-only delle sessioni.
         </div>
       </section>
     </aside>
@@ -834,17 +850,37 @@
   async function suggestDifficulty(userId){
     const ex = $("exerciseSelect").value;
     const sessions = await daoListSessions({ userId, exercise: ex });
-    if (!sessions.length) return { wpm: 240, len: 700, chunk: 3 };
+    if (!sessions.length){
+      if (ex === "chunk") return { wpm: 230, len: 650, chunk: 3 };
+      if (ex === "pacer") return { wpm: 220, len: 750, chunk: 2 };
+      return { wpm: 240, len: 700, chunk: 2 };
+    }
 
-    const last = sessions[sessions.length - 1];
-    const acc = (typeof last.quizAcc === "number") ? last.quizAcc : 0.6;
+    const recent = sessions.slice(-5);
+    const last = recent[recent.length - 1];
+    const avgAcc = recent.reduce((sum,s)=> sum + (typeof s.quizAcc === "number" ? s.quizAcc : 0.6), 0) / recent.length;
+    const avgEffWpm = recent.reduce((sum,s)=> sum + (s.effectiveWpm || s.wpmTarget || 230), 0) / recent.length;
+    const speedRatio = avgEffWpm / Math.max(1, (last.wpmTarget || 230));
+
     const lastWpm = last.wpmTarget || 240;
     const lastLen = last.textTargetLen || 700;
-    const lastChunk = last.chunkSize || 3;
+    const lastChunk = last.chunkSize || 2;
 
-    const wpmDelta = acc >= 0.8 ? 30 : (acc >= 0.65 ? 12 : -18);
-    const lenDelta = acc >= 0.8 ? 160 : (acc >= 0.65 ? 80 : -120);
-    const chunkDelta = acc >= 0.85 ? 1 : 0;
+    const stableGain = avgAcc >= 0.82 && speedRatio >= 0.95;
+    const keepGain = avgAcc >= 0.68;
+
+    let wpmDelta = stableGain ? 26 : (keepGain ? 10 : -20);
+    let lenDelta = stableGain ? 140 : (keepGain ? 60 : -120);
+    let chunkDelta = 0;
+
+    if (ex === "chunk"){
+      chunkDelta = stableGain ? 1 : (avgAcc < 0.58 ? -1 : 0);
+      wpmDelta += stableGain ? 8 : 0;
+    }
+    if (ex === "pacer"){
+      lenDelta += stableGain ? 80 : 0;
+      wpmDelta -= 8;
+    }
 
     return {
       wpm: clamp(Math.round(lastWpm + wpmDelta), 120, 1100),
@@ -875,6 +911,13 @@
   function setReaderMode(exercise){
     $("pacer").style.display = (exercise === "pacer") ? "block" : "none";
     $("rsvpWord").style.display = (exercise === "pacer") ? "none" : "block";
+  }
+
+  function updateSourceUi(){
+    const isCustom = $("sourceSelect").value === "custom";
+    $("customTextWrap").hidden = !isCustom;
+    $("topicInput").disabled = isCustom;
+    $("topicInput").placeholder = isCustom ? "Non serve per testo personalizzato" : "Es. Lettura / Leonardo da Vinci / Machine learning";
   }
 
   function renderPacer(words, index){
@@ -1428,6 +1471,10 @@
       await applyAutoIfNeeded();
     });
 
+    $("sourceSelect").addEventListener("change", ()=>{
+      updateSourceUi();
+    });
+
     $("btnLoadText").addEventListener("click", async ()=>{
       await loadTextFlow();
     });
@@ -1460,8 +1507,8 @@
      ========================= */
   function initSplitter(){
     const splitter = $("splitter");
-    const min = 280; // px
-    const max = 540; // px
+    const min = 220; // px
+    const max = 420; // px
 
     // restore
     const saved = localStorage.getItem("sidebarW");
@@ -1520,7 +1567,10 @@
     if (!currentUserId) return alert("Seleziona o crea un utente.");
     currentLang = $("langSelect").value === "en" ? "en" : "it";
     const source = $("sourceSelect").value;
-    const topic = ($("topicInput").value || "").trim() || (currentLang==="en" ? "Reading" : "Lettura");
+    const customText = ($("customTextInput").value || "").trim();
+    const topic = source === "custom"
+      ? (currentLang === "en" ? "Custom text" : "Testo personalizzato")
+      : (($("topicInput").value || "").trim() || (currentLang==="en" ? "Reading" : "Lettura"));
 
     // auto/manual
     if ($("goalMode").value === "auto"){
@@ -1534,7 +1584,9 @@
 
     currentSource = source;
     currentTopic = topic;
-    currentCacheKey = source + "|" + currentLang + "|" + topic.toLowerCase();
+    currentCacheKey = source === "custom"
+      ? "custom|" + currentLang + "|" + customText.slice(0, 100).toLowerCase()
+      : source + "|" + currentLang + "|" + topic.toLowerCase();
 
     // try cache first if offline or previous exists
     const cached = await daoGetTextCacheByKey(currentCacheKey);
@@ -1547,6 +1599,12 @@
         const bucket = OFFLINE_TEXTS[currentLang];
         const chosen = bucket[Math.floor(Math.random()*bucket.length)];
         fetched = { text: chosen.text, attribution: "Offline demo text — " + chosen.title, source:"offline" };
+      } else if (source === "custom"){
+        if (!customText || customText.length < 120){
+          alert("Incolla almeno ~120 caratteri di testo personalizzato.");
+          return;
+        }
+        fetched = { text: customText, attribution: "Testo utente (locale)", source:"custom" };
       } else if (source === "wikipediaSummary"){
         fetched = await fetchWikiSummary(currentLang, topic);
       } else if (source === "wikipediaExtracts"){
@@ -1688,6 +1746,7 @@
     await loadUsersIntoUI();
     await refreshChart();
     setReaderMode($("exerciseSelect").value);
+    updateSourceUi();
     setButtons("idle");
 
     // restore token
