@@ -283,19 +283,26 @@ async function syncPull(){
 // ---------- wikipedia fetch ----------
 async function fetchWikipediaExtract(lang, minWords){
   const host = lang === "en" ? "en.wikipedia.org" : "it.wikipedia.org";
-  const url = `https://${host}/w/api.php?origin=*&format=json&action=query&generator=random&grnnamespace=0&prop=extracts&explaintext=1&exsectionformat=plain&exintro=0&exchars=12000`;
+  const url = `https://${host}/w/api.php?origin=*&format=json&action=query&generator=random&grnnamespace=0&grnlimit=8&prop=extracts&explaintext=1&exsectionformat=plain&exchars=12000`;
   const r = await fetch(url, { cache: "no-store" });
   if(!r.ok) throw new Error("Wikipedia fetch failed");
   const j = await r.json();
-  const pages = j?.query?.pages;
-  if(!pages) throw new Error("Wikipedia empty");
-  const first = Object.values(pages)[0];
-  const title = first?.title || "Wikipedia";
-  const textRaw = (first?.extract || "").replace(/\n{2,}/g, "\n").trim();
-  const w = wordsOf(textRaw);
-  if(w.length < minWords) throw new Error("Too short");
-  const pageUrl = `https://${host}/wiki/${encodeURIComponent(title.replace(/ /g,"_"))}`;
-  return { title, text: textRaw, sourceUrl: pageUrl, wordCount: w.length };
+
+  const pages = Object.values(j?.query?.pages || {});
+  if(!pages.length) throw new Error("Wikipedia empty");
+
+  const candidates = pages
+    .map(p=>{
+      const title = p?.title || "Wikipedia";
+      const textRaw = (p?.extract || "").replace(/\n{2,}/g, "\n").trim();
+      const w = wordsOf(textRaw);
+      const sourceUrl = `https://${host}/wiki/${encodeURIComponent(title.replace(/ /g,"_"))}`;
+      return { title, text: textRaw, sourceUrl, wordCount: w.length };
+    })
+    .filter(x=>x.wordCount >= minWords);
+
+  if(!candidates.length) throw new Error("Too short");
+  return pick(candidates);
 }
 
 async function getAdaptiveText(lang, minWords, source, customText=""){
@@ -1368,11 +1375,20 @@ function bindSpan(){
   $("#btnSpanCheck").addEventListener("click", spanCheck);
   $("#btnSpanEnd").addEventListener("click", spanEndSession);
   $("#spanInput").addEventListener("keydown", (e)=>{
-    if(e.key==="Enter"){
+    if(e.key==="Enter" || e.key==="NumpadEnter"){
       e.preventDefault();
       spanCheck();
     }
   });
+  document.addEventListener("keydown", (e)=>{
+    if((e.key!=="Enter" && e.key!=="NumpadEnter") || e.repeat) return;
+    const spanView = document.querySelector('.view[data-view="span"]');
+    if(spanView?.classList.contains("hidden")) return;
+    if(document.activeElement?.id === "spanInput") return;
+    e.preventDefault();
+    spanCheck();
+  });
+
   ["spanMs","spanLen","spanAz","spanAZ","span09","spanUS","spanFont"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       spanApplyFont();
