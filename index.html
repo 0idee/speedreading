@@ -27,7 +27,7 @@
   </header>
 
   <main class="layout">
-    <aside class="sidebar">
+    <aside class="dashboard-ribbon">
       <nav class="nav">
         <button class="nav-item active" data-view="dashboard">Dashboard</button>
         <button class="nav-item" data-view="reader">Lettura veloce</button>
@@ -65,8 +65,8 @@
               <button class="btn secondary" id="btnImport">Importa</button>
             </div>
           </div>
-          <div class="card-body">
-            <div class="grid-2">
+          <div class="card-body exercise-body">
+            <div class="exercise-layout">
               <div class="card inner">
                 <div class="card-title">Velocità (WPM) — Lettura</div>
                 <div id="chartWpm" class="chart"></div>
@@ -95,9 +95,9 @@
             </div>
           </div>
 
-          <div class="card-body">
-            <div class="grid-2">
-              <div class="card inner">
+          <div class="card-body exercise-body">
+            <div class="exercise-layout">
+              <div class="card inner settings-panel">
                 <div class="card-title">Impostazioni</div>
 
                 <div class="grid-2 tight">
@@ -138,7 +138,13 @@
                     <select id="readerSource">
                       <option value="wiki">Wikipedia (random)</option>
                       <option value="offline">Offline (fallback)</option>
+                      <option value="custom">Testo incollato</option>
                     </select>
+                  </label>
+
+                  <label class="field grid-span-2">
+                    <span>Testo personalizzato (incolla da editor)</span>
+                    <textarea id="readerCustomText" rows="5" placeholder="Incolla qui il tuo testo..."></textarea>
                   </label>
                 </div>
 
@@ -148,7 +154,7 @@
                 </div>
               </div>
 
-              <div class="card inner">
+              <div class="card inner display-panel">
                 <div class="card-title">Display</div>
                 <div id="readerDisplay" class="reader-display" aria-live="polite"></div>
                 <div id="pacerBox" class="pacer-box hidden"></div>
@@ -178,10 +184,11 @@
             </div>
           </div>
 
-          <div class="card-body">
-            <div class="grid-2">
-              <div class="card inner">
+          <div class="card-body exercise-body">
+            <div class="exercise-layout">
+              <div class="card inner settings-panel">
                 <div class="card-title">Impostazioni</div>
+
                 <div class="grid-2 tight">
                   <label class="field">
                     <span>Millisecondi</span>
@@ -216,7 +223,7 @@
                 <div class="muted small" id="spanScore" style="margin-top: 10px;">Score: 0/0</div>
               </div>
 
-              <div class="card inner">
+              <div class="card inner display-panel">
                 <div class="card-title">Prova</div>
                 <div class="span-box">
                   <div id="spanStimulus" class="span-stimulus" aria-live="polite">—</div>
@@ -242,11 +249,11 @@
             </div>
           </div>
 
-          <div class="card-body">
-            <div class="grid-2">
-              <div class="card inner">
+          <div class="card-body exercise-body">
+            <div class="exercise-layout fixation-layout">
+              <div class="card inner settings-panel narrow">
                 <div class="card-title">Impostazioni</div>
-                <div class="grid-2 tight">
+                <div class="tight stack-fields">
                   <label class="field">
                     <span>Millisecondi</span>
                     <input id="fixMs" type="number" min="50" max="3000" step="10" value="250" />
@@ -297,7 +304,13 @@
                     <select id="fixSource">
                       <option value="wiki">Wikipedia (random)</option>
                       <option value="offline">Offline (fallback)</option>
+                      <option value="custom">Testo incollato</option>
                     </select>
+                  </label>
+
+                  <label class="field grid-span-2">
+                    <span>Testo personalizzato (incolla da editor)</span>
+                    <textarea id="fixCustomText" rows="4" placeholder="Incolla qui il tuo testo..."></textarea>
                   </label>
                 </div>
 
@@ -307,7 +320,7 @@
                 </div>
               </div>
 
-              <div class="card inner">
+              <div class="card inner display-panel">
                 <div class="card-title">Esercizio</div>
                 <div id="fixGrid" class="fix-grid" aria-live="polite"></div>
                 <div class="row between" style="margin-top: 10px;">
