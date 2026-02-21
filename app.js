@@ -1,3 +1,4 @@
+import { normalizeUserRating, computeItemRating, updateUserRating, selectNextItem, buildSpanItemPool } from "./elo.js";
 // SpeedRead Trainer V2 (no build tools, Brave-friendly)
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
@@ -943,6 +944,18 @@ function spanGenerate(){
   return s;
 }
 
+function spanSelectAdaptiveConfig(){
+  const u = getActiveUser();
+  const elo = normalizeUserRating(u.settings.span?.elo || {});
+  const item = selectNextItem({ userRating: elo, itemPool: buildSpanItemPool() });
+  if(!item) return;
+  $("#spanLen").value = String(item.length);
+  $("#spanAz").checked = !!item.charset.az;
+  $("#spanAZ").checked = !!item.charset.AZ;
+  $("#span09").checked = !!item.charset.n09;
+  $("#spanUS").checked = !!item.charset.us;
+}
+
 function spanApplyFont(){
   const pct = clamp(Number($("#spanFont").value)||110, 70, 220);
   $("#spanStimulus").style.fontSize = `${Math.round(54*(pct/110))}px`;
@@ -974,6 +987,7 @@ function spanStartSessionIfNeeded(){
 
 function spanNewTrial(){
   spanStartSessionIfNeeded();
+  spanSelectAdaptiveConfig();
   spanApplyFont();
   $("#spanResult").textContent = "";
   $("#spanInput").value = "";
@@ -1370,6 +1384,14 @@ function bindReader(){
   });
 }
 
+function spanHandleEnterAction(){
+  if(Span.current){
+    spanCheck();
+    return;
+  }
+  spanNewTrial();
+}
+
 function bindSpan(){
   $("#btnSpanNew").addEventListener("click", spanNewTrial);
   $("#btnSpanCheck").addEventListener("click", spanCheck);
@@ -1377,7 +1399,7 @@ function bindSpan(){
   $("#spanInput").addEventListener("keydown", (e)=>{
     if(e.key==="Enter" || e.key==="NumpadEnter"){
       e.preventDefault();
-      spanCheck();
+      spanHandleEnterAction();
     }
   });
   document.addEventListener("keydown", (e)=>{
