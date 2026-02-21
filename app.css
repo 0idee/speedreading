@@ -193,6 +193,37 @@ textarea{
   .exercise-layout{grid-template-columns: 1fr}
 }
 
+.fixation-layout{
+  grid-template-columns: 10% 90%;
+}
+
+/* FIXED LAYOUT: Punti di fissità => 10% impostazioni, 90% esercizio */
+.view[data-view="fixation"] .exercise-layout.fixation-layout{
+  display:grid !important;
+  grid-template-columns: 10% 90% !important;
+}
+.view[data-view="fixation"] .exercise-layout.fixation-layout > .settings-panel{
+  grid-column: 1;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: hidden;
+}
+.view[data-view="fixation"] .exercise-layout.fixation-layout > .display-panel{
+  grid-column: 2;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+.stack-fields{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+@media (max-width: 980px){
+  .fixation-layout{grid-template-columns: 1fr}
+  .fixation-layout .settings-panel, .settings-panel.narrow{max-width:none}
+}
 
 .btn{
   padding:10px 12px;
