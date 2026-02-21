@@ -3,7 +3,7 @@ import { normalizeUserRating, computeItemRating, updateUserRating, selectNextIte
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
 const APP_KEY = "speedread_trainer_v2_state";
-const APP_VERSION = 4;
+const APP_VERSION = 3;
 
 const EXERCISES = {
   reader: { id: "reader", name: "Lettura veloce" },
@@ -94,7 +94,7 @@ function defaultState(){
         sessions: [],
         settings: {
           reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"" },
-          span: { ms: 250, len: 4, az:true, AZ:true, n09:true, us:true, font:110, elo: { R_user: 1000, RD_user: 250 } },
+          span: { ms: 250, len: 4, az:true, AZ:true, n09:true, us:true, font:110 },
           fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki", customText:"" },
         }
       }
@@ -126,7 +126,6 @@ function migrateState(st){
     if(!u.settings.fixation) u.settings.fixation = defaultState().users[0].settings.fixation;
     if(typeof u.settings.reader.customText !== "string") u.settings.reader.customText = "";
     if(typeof u.settings.fixation.customText !== "string") u.settings.fixation.customText = "";
-    u.settings.span.elo = normalizeUserRating(u.settings.span.elo || {});
 
     // Fix the bug that caused: (a.startedAt||"").localeCompare is not a function
     // Ensure startedAt/endedAt are ISO strings (or null), not numbers/objects.
@@ -1032,20 +1031,6 @@ function spanEndSession(){
   };
   addSessionToUser(Span.session);
   const u = getActiveUser();
-  const currElo = normalizeUserRating(u.settings.span?.elo || {});
-  const itemCfg = {
-    length: Number($("#spanLen").value)||4,
-    charset: { az: $("#spanAz").checked, AZ: $("#spanAZ").checked, n09: $("#span09").checked, us: $("#spanUS").checked }
-  };
-  const R_item = computeItemRating(itemCfg);
-  const eloNext = updateUserRating({
-    R_user: currElo.R_user,
-    RD_user: currElo.RD_user,
-    R_item,
-    score: Number.isFinite(acc) ? acc : 0.5,
-  });
-  u.settings.span.elo = { R_user: Math.round(eloNext.R_user), RD_user: Math.round(eloNext.RD_user) };
-
   const lvl = computeSpanLevel(u);
   u.settings.span.ms = lvl.ms;
   u.settings.span.len = lvl.len;
@@ -1423,7 +1408,7 @@ function bindSpan(){
     if(spanView?.classList.contains("hidden")) return;
     if(document.activeElement?.id === "spanInput") return;
     e.preventDefault();
-    spanHandleEnterAction();
+    spanCheck();
   });
 
   ["spanMs","spanLen","spanAz","spanAZ","span09","spanUS","spanFont"].forEach(id=>{
@@ -1509,7 +1494,6 @@ function applyUserSettingsToForm(){
 
   const spl = computeSpanLevel(u);
   const sp = u.settings.span || defaultState().users[0].settings.span;
-  sp.elo = normalizeUserRating(sp.elo || {});
   $("#spanMs").value = String(sp.ms ?? spl.ms);
   $("#spanLen").value = String(sp.len ?? spl.len);
   $("#spanAz").checked = !!sp.az;
