@@ -2,7 +2,7 @@
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
 const APP_KEY = "speedread_trainer_v2_state";
-const APP_VERSION = 2;
+const APP_VERSION = 3;
 
 const EXERCISES = {
   reader: { id: "reader", name: "Lettura veloce" },
@@ -92,9 +92,9 @@ function defaultState(){
         createdAt: nowIso(),
         sessions: [],
         settings: {
-          reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki" },
+          reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"" },
           span: { ms: 250, len: 4, az:true, AZ:true, n09:true, us:true, font:110 },
-          fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki" },
+          fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki", customText:"" },
         }
       }
     ],
@@ -120,6 +120,11 @@ function migrateState(st){
   for(const u of st.users){
     if(!u.sessions) u.sessions = [];
     if(!u.settings) u.settings = defaultState().users[0].settings;
+    if(!u.settings.reader) u.settings.reader = defaultState().users[0].settings.reader;
+    if(!u.settings.span) u.settings.span = defaultState().users[0].settings.span;
+    if(!u.settings.fixation) u.settings.fixation = defaultState().users[0].settings.fixation;
+    if(typeof u.settings.reader.customText !== "string") u.settings.reader.customText = "";
+    if(typeof u.settings.fixation.customText !== "string") u.settings.fixation.customText = "";
 
     // Fix the bug that caused: (a.startedAt||"").localeCompare is not a function
     // Ensure startedAt/endedAt are ISO strings (or null), not numbers/objects.
@@ -278,22 +283,35 @@ async function syncPull(){
 // ---------- wikipedia fetch ----------
 async function fetchWikipediaExtract(lang, minWords){
   const host = lang === "en" ? "en.wikipedia.org" : "it.wikipedia.org";
-  const url = `https://${host}/w/api.php?origin=*&format=json&action=query&generator=random&grnnamespace=0&prop=extracts&explaintext=1&exsectionformat=plain&exintro=0&exchars=12000`;
+  const url = `https://${host}/w/api.php?origin=*&format=json&action=query&generator=random&grnnamespace=0&grnlimit=8&prop=extracts&explaintext=1&exsectionformat=plain&exchars=12000`;
   const r = await fetch(url, { cache: "no-store" });
   if(!r.ok) throw new Error("Wikipedia fetch failed");
   const j = await r.json();
-  const pages = j?.query?.pages;
-  if(!pages) throw new Error("Wikipedia empty");
-  const first = Object.values(pages)[0];
-  const title = first?.title || "Wikipedia";
-  const textRaw = (first?.extract || "").replace(/\n{2,}/g, "\n").trim();
-  const w = wordsOf(textRaw);
-  if(w.length < minWords) throw new Error("Too short");
-  const pageUrl = `https://${host}/wiki/${encodeURIComponent(title.replace(/ /g,"_"))}`;
-  return { title, text: textRaw, sourceUrl: pageUrl, wordCount: w.length };
+
+  const pages = Object.values(j?.query?.pages || {});
+  if(!pages.length) throw new Error("Wikipedia empty");
+
+  const candidates = pages
+    .map(p=>{
+      const title = p?.title || "Wikipedia";
+      const textRaw = (p?.extract || "").replace(/\n{2,}/g, "\n").trim();
+      const w = wordsOf(textRaw);
+      const sourceUrl = `https://${host}/wiki/${encodeURIComponent(title.replace(/ /g,"_"))}`;
+      return { title, text: textRaw, sourceUrl, wordCount: w.length };
+    })
+    .filter(x=>x.wordCount >= minWords);
+
+  if(!candidates.length) throw new Error("Too short");
+  return pick(candidates);
 }
 
-async function getAdaptiveText(lang, minWords, source){
+async function getAdaptiveText(lang, minWords, source, customText=""){
+  if(source === "custom") {
+    const text = (customText || "").trim();
+    const wordCount = wordsOf(text).length;
+    if(wordCount < 40) throw new Error("Incolla almeno 40 parole nel testo personalizzato.");
+    return { title: "Testo personalizzato", text, sourceUrl: null, wordCount };
+  }
   if(source === "offline"){
     const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
     const text = t.join("\n\n");
@@ -374,13 +392,46 @@ function sessionsByExercise(user, exId){
 
 function computeReaderLevel(user){
   const ss = sessionsByExercise(user, "reader");
-  const wpm = ss.map(s=>s.metrics?.wpm).filter(Number.isFinite);
+  const recent = ss.slice(-8);
+  const wpm = recent.map(s=>s.metrics?.wpm).filter(Number.isFinite);
+  const acc = recent.map(s=>s.metrics?.accuracy).filter(Number.isFinite);
   const m = median(wpm);
   if(!m) return { level: 1, baseWpm: 300, minWords: 180 };
-  const level = clamp(Math.floor(m / 150) + 1, 1, 10);
-  const baseWpm = clamp(Math.round(m/10)*10, 180, 1200);
-  const minWords = clamp(120 + level*90, 120, 1400);
+  const accFactor = acc.length ? clamp((median(acc)-0.65)/0.3, 0, 1) : 0.5;
+  const perf = m * (0.75 + accFactor*0.5);
+  const level = clamp(Math.floor(perf / 170) + 1, 1, 10);
+  const baseWpm = clamp(Math.round((m + level*18)/10)*10, 180, 1200);
+  const minWords = clamp(140 + level*95, 140, 1500);
   return { level, baseWpm, minWords };
+}
+
+function computeSpanLevel(user){
+  const ss = sessionsByExercise(user, "span").slice(-8);
+  const acc = ss.map(s=>s.metrics?.accuracy).filter(Number.isFinite);
+  const tries = ss.map(s=>s.metrics?.tries).filter(Number.isFinite);
+  const a = median(acc);
+  const t = median(tries) || 0;
+  if(!a) return { level: 1, ms: 260, len: 4 };
+  const level = clamp(Math.round(a*6 + t/5), 1, 10);
+  const ms = clamp(Math.round(320 - level*18), 90, 3000);
+  const len = clamp(Math.round(3 + level/1.8), 3, 12);
+  return { level, ms, len };
+}
+
+function computeFixLevel(user){
+  const ss = sessionsByExercise(user, "fixation").slice(-8);
+  const completed = ss.filter(s=>s.metrics?.accuracy===1).length;
+  const duration = ss.map(s=>s.metrics?.durationSec).filter(Number.isFinite);
+  if(!ss.length) return { level: 1, ms: 260, laps: 2, rows: 10 };
+  const completionRate = completed/ss.length;
+  const speed = duration.length ? clamp(1 - (median(duration)/240), 0, 1) : 0.4;
+  const level = clamp(Math.round(1 + completionRate*5 + speed*4), 1, 10);
+  return {
+    level,
+    ms: clamp(Math.round(320 - level*20), 90, 3000),
+    laps: clamp(1 + Math.floor(level/3), 1, 8),
+    rows: clamp(8 + Math.floor(level/2), 8, 16),
+  };
 }
 
 function fmtSessionLabel(s){
@@ -496,9 +547,11 @@ function renderUserSelect(){
 
 function renderGoal(){
   const u = getActiveUser();
-  const lvl = computeReaderLevel(u);
-  $("#goalLine").textContent = `Target testo: ≥ ${lvl.minWords} parole • Target WPM: ${lvl.baseWpm}`;
-  $("#levelLine").textContent = `Livello stimato: ${lvl.level}/10 (basato sulle sessioni di lettura)`;
+  const rd = computeReaderLevel(u);
+  const sp = computeSpanLevel(u);
+  const fx = computeFixLevel(u);
+  $("#goalLine").textContent = `Reader L${rd.level}/10 • Span L${sp.level}/10 • Fix L${fx.level}/10`;
+  $("#levelLine").textContent = `Target: ${rd.baseWpm} WPM, span ${sp.len} char/${sp.ms}ms, fix ${fx.ms}ms • giri ${fx.laps}`;
 }
 
 function renderRecent(){
@@ -640,7 +693,7 @@ async function readerLoadText(){
   const source = $("#readerSource").value;
 
   $("#readerStatus").textContent = "Carico testo…";
-  const info = await getAdaptiveText(lang, minWords, source);
+  const info = await getAdaptiveText(lang, minWords, source, $("#readerCustomText")?.value || "");
   setTextCache(lang, info);
   $("#readerStatus").textContent = `Testo pronto: ${info.wordCount} parole`;
   return info;
@@ -845,6 +898,13 @@ function readerStop(completed=false){
       wordCount: words,
     };
     addSessionToUser(Reader.session);
+    if(completed){
+      const u = getActiveUser();
+      const lvl = computeReaderLevel(u);
+      u.settings.reader.wpm = lvl.baseWpm;
+      u.settings.reader.minWords = lvl.minWords;
+      saveState();
+    }
   }
 
   rerenderDashboard();
@@ -956,6 +1016,11 @@ function spanEndSession(){
     tries: Span.tries,
   };
   addSessionToUser(Span.session);
+  const u = getActiveUser();
+  const lvl = computeSpanLevel(u);
+  u.settings.span.ms = lvl.ms;
+  u.settings.span.len = lvl.len;
+  saveState();
   Span.session = null;
   Span.tries = 0;
   Span.correct = 0;
@@ -1047,7 +1112,7 @@ async function fixLoadText(){
   const minWords = Math.max(120, Math.round(total * (segLen/6))); // rough
 
   $("#fixStatus").textContent = "Carico testo…";
-  const info = await getAdaptiveText(lang, minWords, source);
+  const info = await getAdaptiveText(lang, minWords, source, $("#fixCustomText")?.value || "");
   setTextCache(lang, info);
   const segs = splitIntoSegments(info.text, segLen);
   Fix.segs = segs;
@@ -1167,6 +1232,14 @@ function fixStop(completed=false){
       score: completed ? "OK" : "STOP",
     };
     addSessionToUser(Fix.session);
+    if(completed){
+      const u = getActiveUser();
+      const lvl = computeFixLevel(u);
+      u.settings.fixation.ms = lvl.ms;
+      u.settings.fixation.laps = lvl.laps;
+      u.settings.fixation.rows = lvl.rows;
+      saveState();
+    }
     Fix.session = null;
   }
   rerenderDashboard();
@@ -1257,7 +1330,7 @@ function bindDashboard(){
     const lang = ($("#readerLang")?.value) || getActiveUser().settings.reader.lang || "it";
     const lvl = computeReaderLevel(getActiveUser());
     const source = ($("#readerSource")?.value) || "wiki";
-    const info = await getAdaptiveText(lang, lvl.minWords, source);
+    const info = await getAdaptiveText(lang, lvl.minWords, source, $("#readerCustomText")?.value || "");
     setTextCache(lang, info);
     rerenderAll();
   });
@@ -1279,7 +1352,7 @@ function bindReader(){
   $("#btnReaderStop").addEventListener("click", ()=> readerStop(false));
 
   // save reader settings on change
-  ["readerLang","readerMode","readerWpm","readerChunk","readerMinWords","readerSource"].forEach(id=>{
+  ["readerLang","readerMode","readerWpm","readerChunk","readerMinWords","readerSource","readerCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
       u.settings.reader = {
@@ -1289,6 +1362,7 @@ function bindReader(){
         chunk: Number($("#readerChunk").value)||3,
         minWords: Number($("#readerMinWords").value)||180,
         source: $("#readerSource").value,
+        customText: $("#readerCustomText").value || "",
       };
       saveState();
       renderTextMeta();
@@ -1301,11 +1375,20 @@ function bindSpan(){
   $("#btnSpanCheck").addEventListener("click", spanCheck);
   $("#btnSpanEnd").addEventListener("click", spanEndSession);
   $("#spanInput").addEventListener("keydown", (e)=>{
-    if(e.key==="Enter"){
+    if(e.key==="Enter" || e.key==="NumpadEnter"){
       e.preventDefault();
       spanCheck();
     }
   });
+  document.addEventListener("keydown", (e)=>{
+    if((e.key!=="Enter" && e.key!=="NumpadEnter") || e.repeat) return;
+    const spanView = document.querySelector('.view[data-view="span"]');
+    if(spanView?.classList.contains("hidden")) return;
+    if(document.activeElement?.id === "spanInput") return;
+    e.preventDefault();
+    spanCheck();
+  });
+
   ["spanMs","spanLen","spanAz","spanAZ","span09","spanUS","spanFont"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       spanApplyFont();
@@ -1332,7 +1415,7 @@ function bindFix(){
   $("#btnFixPause").addEventListener("click", fixPauseToggle);
   $("#btnFixStop").addEventListener("click", ()=> fixStop(false));
 
-  ["fixMs","fixLaps","fixCols","fixRows","fixMode","fixSegLen","fixLang","fixSource"].forEach(id=>{
+  ["fixMs","fixLaps","fixCols","fixRows","fixMode","fixSegLen","fixLang","fixSource","fixCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
       u.settings.fixation = {
@@ -1344,6 +1427,7 @@ function bindFix(){
         segLen: Number($("#fixSegLen").value)||20,
         lang: $("#fixLang").value,
         source: $("#fixSource").value,
+        customText: $("#fixCustomText").value || "",
       };
       saveState();
     });
@@ -1384,10 +1468,12 @@ function applyUserSettingsToForm(){
   $("#readerChunk").value = String(rs.chunk ?? 3);
   $("#readerMinWords").value = String(rs.minWords ?? lvl.minWords);
   $("#readerSource").value = rs.source || "wiki";
+  $("#readerCustomText").value = rs.customText || "";
 
+  const spl = computeSpanLevel(u);
   const sp = u.settings.span || defaultState().users[0].settings.span;
-  $("#spanMs").value = String(sp.ms ?? 250);
-  $("#spanLen").value = String(sp.len ?? 4);
+  $("#spanMs").value = String(sp.ms ?? spl.ms);
+  $("#spanLen").value = String(sp.len ?? spl.len);
   $("#spanAz").checked = !!sp.az;
   $("#spanAZ").checked = !!sp.AZ;
   $("#span09").checked = !!sp.n09;
@@ -1395,15 +1481,17 @@ function applyUserSettingsToForm(){
   $("#spanFont").value = String(sp.font ?? 110);
   spanApplyFont();
 
+  const fxl = computeFixLevel(u);
   const fx = u.settings.fixation || defaultState().users[0].settings.fixation;
-  $("#fixMs").value = String(fx.ms ?? 250);
-  $("#fixLaps").value = String(fx.laps ?? 2);
+  $("#fixMs").value = String(fx.ms ?? fxl.ms);
+  $("#fixLaps").value = String(fx.laps ?? fxl.laps);
   $("#fixCols").value = String(fx.cols ?? 3);
-  $("#fixRows").value = String(fx.rows ?? 10);
+  $("#fixRows").value = String(fx.rows ?? fxl.rows);
   $("#fixMode").value = fx.mode ?? "dots";
   $("#fixSegLen").value = String(fx.segLen ?? 20);
   $("#fixLang").value = fx.lang ?? "it";
   $("#fixSource").value = fx.source ?? "wiki";
+  $("#fixCustomText").value = fx.customText || "";
 }
 
 function rerenderDashboard(){
