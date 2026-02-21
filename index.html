@@ -1,0 +1,1704 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Speed Reading V2 — local-first</title>
+  <meta name="theme-color" content="#111111" />
+  <style>
+    :root{
+      color-scheme: light dark;
+      --bg: rgba(127,127,127,.06);
+      --bd: rgba(127,127,127,.28);
+      --bd2: rgba(127,127,127,.40);
+      --pad: 14px;
+      --r: 14px;
+
+      /* Sidebar width (resizable) */
+      --sidebar-w: 22rem;
+      --splitter-w: 10px;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    a{ color: inherit; }
+
+    header{
+      display:flex; flex-wrap:wrap; gap:.75rem 1rem;
+      align-items:center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--bd);
+      background: rgba(127,127,127,.04);
+    }
+    header .brand{ font-weight: 800; letter-spacing:.2px; }
+    header .toolbar{ margin-left:auto; display:flex; gap:.5rem; flex-wrap:wrap; }
+    button, input, select, textarea{
+      font: inherit;
+      border-radius: 12px;
+      border: 1px solid var(--bd2);
+      padding: 10px 12px;
+      background: transparent;
+      color: inherit;
+    }
+    button{ cursor:pointer; }
+    button.primary{ border-color: transparent; background:#2b6cff; color:#fff; }
+    button.danger{ border-color: transparent; background:#cc2b2b; color:#fff; }
+    button.ghost{ background: transparent; }
+
+    .pill{
+      display:inline-block;
+      border:1px solid var(--bd2);
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 12px;
+      opacity:.9;
+    }
+    .muted{ font-size: 12px; opacity: .85; line-height: 1.35; }
+    .wrap-anywhere{ overflow-wrap:anywhere; }
+
+    .banner{
+      margin: 12px 16px 0 16px;
+      border: 1px solid var(--bd2);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: rgba(255, 180, 0, .12);
+    }
+    .banner strong{ font-weight: 800; }
+
+    main{
+      padding: 16px;
+    }
+
+    /* LAYOUT: sidebar | splitter | content */
+    .layout{
+      display:grid;
+      grid-template-columns: 1fr;  /* mobile-first */
+      gap: 16px;
+    }
+    .sidebar, .content{ min-width: 0; } /* CRITICO: evita overflow */
+    .sidebar{
+      display:grid;
+      gap: 16px;
+    }
+    .content{
+      display:grid;
+      gap: 16px;
+    }
+
+    .card{
+      border: 1px solid var(--bd);
+      background: var(--bg);
+      border-radius: var(--r);
+      padding: var(--pad);
+      min-width: 0; /* anche qui */
+    }
+    .card h2{
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      letter-spacing: .2px;
+    }
+    .row{
+      display:flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .field{ flex:1; min-width: 190px; }
+    label{ display:block; font-size:12px; opacity:.85; margin-bottom:6px; }
+
+    /* Reader area */
+    .readerBox{
+      border: 1px dashed var(--bd2);
+      border-radius: 16px;
+      padding: 18px 10px;
+      min-height: 220px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      overflow:hidden;
+    }
+    .rsvpWord{
+      font-weight: 900;
+      letter-spacing: .4px;
+      font-size: clamp(24px, 5vw, 56px);
+      text-align: center;
+      padding: 0 10px;
+    }
+    .pacer{
+      display:none;
+      max-height: 260px;
+      overflow:auto;
+      font-size: 18px;
+      line-height: 1.9;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--bd);
+      background: rgba(127,127,127,.04);
+    }
+    mark.hl{
+      background: rgba(255, 223, 0, .35);
+      border-radius: 6px;
+      padding: 2px 3px;
+    }
+
+    /* KPI */
+    .kpi{
+      display:grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 10px;
+    }
+    @media (min-width: 42em){
+      .kpi{ grid-template-columns: repeat(4, minmax(0,1fr)); }
+    }
+    .kpi .box{
+      border: 1px solid var(--bd);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(127,127,127,.04);
+      min-width: 0;
+    }
+    .kpi .k{ font-size: 12px; opacity:.8; }
+    .kpi .v{ font-size: 18px; font-weight: 900; margin-top: 4px; }
+
+    /* Chart canvas: mantiene proporzioni */
+    canvas{
+      width: 100%;
+      height: 220px;
+      border-radius: 12px;
+      border: 1px solid var(--bd);
+      background: rgba(127,127,127,.02);
+    }
+
+    /* Splitter (desktop) */
+    .splitter{
+      display:none;
+    }
+
+    @media (min-width: 64em){
+      .layout{
+        grid-template-columns: var(--sidebar-w) var(--splitter-w) minmax(0, 1fr);
+        align-items: start;
+      }
+      .splitter{
+        display:flex;
+        align-items: stretch;
+        justify-content:center;
+        border-radius: 999px;
+        background: rgba(127,127,127,.10);
+        border: 1px solid var(--bd);
+        cursor: col-resize;
+        user-select:none;
+        touch-action: none;
+      }
+      .splitter:focus{
+        outline: 2px solid rgba(43,108,255,.7);
+        outline-offset: 2px;
+      }
+      .splitter .grip{
+        width: 4px;
+        border-radius: 999px;
+        background: rgba(127,127,127,.45);
+        margin: 12px 0;
+      }
+    }
+
+    /* Mobile sidebar fold */
+    .sidebarToggle{
+      display:inline-flex;
+      gap:.5rem;
+      align-items:center;
+    }
+    .sidebarCollapsed .sidebar{ display:none; }
+
+    /* Accessibilità: riduci motion */
+    @media (prefers-reduced-motion: reduce){
+      *{ scroll-behavior:auto !important; transition:none !important; animation:none !important; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand">Speed Reading V2 <span class="pill">local-first</span> <span class="pill">IT/EN</span></div>
+  <div class="toolbar">
+    <button id="btnToggleSidebar" class="ghost sidebarToggle" title="Mostra/Nascondi sidebar">☰ Sidebar</button>
+    <button id="btnExport" class="ghost" title="Esporta backup (JSON o cifrato)">Export</button>
+    <button id="btnImport" class="ghost" title="Importa backup">Import</button>
+    <button id="btnSync" class="ghost" title="Sync opzionale (se configuri un server)">Sync</button>
+  </div>
+</header>
+
+<div id="bannerFile" class="banner" style="display:none;">
+  <strong>Avviso:</strong> stai eseguendo da <code>file:</code>. Alcuni fetch e funzioni avanzate possono comportarsi in modo diverso.
+  Per un comportamento stabile, avvia un server locale e apri <code>http://localhost</code>.
+</div>
+
+<div id="bannerStorage" class="banner" style="display:none;">
+  <strong>Avviso:</strong> IndexedDB non disponibile o bloccato. Uso un fallback su <code>localStorage</code> (meno robusto).
+  Verifica impostazioni Brave (es. “Forget me when I close this site”) e permessi storage.
+</div>
+
+<main>
+  <div id="app" class="layout">
+    <aside class="sidebar" aria-label="Pannello laterale">
+      <section class="card">
+        <h2>Utenti</h2>
+        <div class="row">
+          <div class="field">
+            <label for="userSelect">Seleziona</label>
+            <select id="userSelect"></select>
+          </div>
+          <button id="btnDeleteUser" class="danger" title="Elimina utente selezionato">Elimina</button>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <div class="field">
+            <label for="newUserName">Nuovo utente</label>
+            <input id="newUserName" placeholder="Es. Luca" />
+          </div>
+          <button id="btnAddUser" class="primary">Crea</button>
+        </div>
+        <div class="muted" style="margin-top:10px;">
+          Se i profili “spariscono”, controlla se Brave ha attivo <code>Forget me when I close this site</code>.
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Allenamento</h2>
+
+        <div class="row">
+          <div class="field">
+            <label for="langSelect">Lingua testo</label>
+            <select id="langSelect">
+              <option value="it">Italiano</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="exerciseSelect">Esercizio</label>
+            <select id="exerciseSelect">
+              <option value="rsvp">RSVP (parola singola)</option>
+              <option value="chunk">Chunking (gruppi di parole)</option>
+              <option value="pacer">Pacer (evidenziazione)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:10px;">
+          <div class="field">
+            <label for="sourceSelect">Fonte</label>
+            <select id="sourceSelect">
+              <option value="wikipediaSummary">Wikipedia (summary)</option>
+              <option value="wikipediaExtracts">Wikipedia (extracts plaintext)</option>
+              <option value="offline">Offline (testo interno)</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="topicInput">Titolo/argomento</label>
+            <input id="topicInput" placeholder="Es. Lettura / Leonardo da Vinci / Machine learning" />
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:10px;">
+          <div class="field">
+            <label for="goalMode">Difficoltà</label>
+            <select id="goalMode">
+              <option value="auto">Auto (scala su risultati)</option>
+              <option value="manual">Manuale</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="wpmInput">WPM target</label>
+            <input id="wpmInput" type="number" min="100" max="1200" value="250" />
+          </div>
+
+          <div class="field">
+            <label for="lenInput">Parole target</label>
+            <input id="lenInput" type="number" min="100" max="6000" value="700" />
+          </div>
+
+          <div class="field">
+            <label for="chunkInput">Chunk size</label>
+            <input id="chunkInput" type="number" min="1" max="10" value="3" />
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:12px;">
+          <button id="btnLoadText" class="primary">Carica testo</button>
+          <button id="btnStart" disabled>Start</button>
+          <button id="btnPause" disabled>Pausa</button>
+          <button id="btnStop" disabled>Stop</button>
+        </div>
+
+        <div class="muted wrap-anywhere" style="margin-top:10px;">
+          <div><b>Attribuzione:</b> <span id="attribution">—</span></div>
+          <div><b>Testo cache:</b> <span id="cacheInfo">—</span></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Sync (opzionale)</h2>
+        <div class="row">
+          <div class="field">
+            <label for="syncUrl">Server URL</label>
+            <input id="syncUrl" placeholder="Es. http://localhost:8787" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <div class="field">
+            <label for="syncEmail">Email</label>
+            <input id="syncEmail" placeholder="demo@example.com" />
+          </div>
+          <div class="field">
+            <label for="syncPassword">Password</label>
+            <input id="syncPassword" type="password" placeholder="demo" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <button id="btnLogin">Login</button>
+          <button id="btnSyncNow">Sync now</button>
+          <span class="muted" id="syncStatus">—</span>
+        </div>
+        <div class="muted" style="margin-top:10px;">
+          Il sync usa REST + JWT (demo) e push append-only delle sessioni.
+        </div>
+      </section>
+    </aside>
+
+    <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Ridimensiona sidebar">
+      <div class="grip" aria-hidden="true"></div>
+    </div>
+
+    <section class="content" aria-label="Area principale">
+      <section class="card">
+        <h2>Sessione</h2>
+
+        <div class="kpi">
+          <div class="box"><div class="k">WPM effettivo</div><div class="v" id="kpiWpm">—</div></div>
+          <div class="box"><div class="k">Accuratezza quiz</div><div class="v" id="kpiAcc">—</div></div>
+          <div class="box"><div class="k">Leggibilità (0-100+)</div><div class="v" id="kpiCx">—</div></div>
+          <div class="box"><div class="k">Parole lette</div><div class="v" id="kpiWords">—</div></div>
+        </div>
+
+        <div class="readerBox" style="margin-top:12px;">
+          <div id="rsvpWord" class="rsvpWord">Carica un testo…</div>
+        </div>
+        <div id="pacer" class="pacer" aria-label="Testo con pacer"></div>
+
+        <div class="row" style="margin-top:12px;">
+          <button id="btnQuiz" disabled>Quiz (3 domande)</button>
+          <span class="muted" id="quizResult"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Statistiche</h2>
+        <div class="row">
+          <div class="field">
+            <label for="metricSelect">Metrica</label>
+            <select id="metricSelect">
+              <option value="wpm">WPM effettivo</option>
+              <option value="acc">Accuratezza quiz</option>
+              <option value="cx">Leggibilità</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="filterExercise">Filtro esercizio</label>
+            <select id="filterExercise">
+              <option value="all">Tutti</option>
+              <option value="rsvp">RSVP</option>
+              <option value="chunk">Chunking</option>
+              <option value="pacer">Pacer</option>
+            </select>
+          </div>
+        </div>
+        <canvas id="chart" width="900" height="260" aria-label="Grafico progressi"></canvas>
+        <div class="muted" style="margin-top:10px;">
+          X = tempo (ordine sessioni), Y = metrica selezionata. Nessuna dipendenza esterna: chart in canvas.
+        </div>
+      </section>
+    </section>
+  </div>
+</main>
+
+<script>
+(function(){
+  "use strict";
+
+  /* =========================
+     Brave / environment hints
+     ========================= */
+  const isFile = location.protocol === "file:";
+  if (isFile) document.getElementById("bannerFile").style.display = "block";
+
+  /* =========================
+     DOM helpers
+     ========================= */
+  const $ = (id)=> document.getElementById(id);
+
+  /* =========================
+     IDs
+     ========================= */
+  function uuid(){
+    return (crypto && crypto.randomUUID) ? crypto.randomUUID() :
+      "id-" + Math.random().toString(16).slice(2) + "-" + Date.now();
+  }
+  function nowISO(){ return new Date().toISOString(); }
+
+  /* =========================
+     Word / sentence segmentation (IT/EN)
+     ========================= */
+  function segmentWords(text, lang){
+    text = (text || "").replace(/\s+/g," ").trim();
+    if (!text) return [];
+    try{
+      if (typeof Intl !== "undefined" && Intl.Segmenter){
+        const seg = new Intl.Segmenter(lang === "en" ? "en" : "it", { granularity:"word" });
+        const out = [];
+        for (const part of seg.segment(text)){
+          if (part.isWordLike) out.push(part.segment);
+        }
+        return out;
+      }
+    } catch(_) {}
+    // fallback: regex semplice
+    return text.split(/\s+/).filter(Boolean);
+  }
+
+  function countSentences(text){
+    const t = (text||"").replace(/\s+/g," ").trim();
+    if (!t) return 0;
+    const s = t.split(/[.!?]+/).map(x=>x.trim()).filter(Boolean);
+    return Math.max(1, s.length);
+  }
+
+  /* =========================
+     Readability proxies (IT/EN)
+     - IT: Gulpease-like (letters + sentences + words)
+     - EN: Flesch reading ease (syllables heuristic)
+     ========================= */
+  function countLetters(text){
+    const m = (text||"").match(/\p{L}/gu);
+    return m ? m.length : 0;
+  }
+
+  function syllablesEn(word){
+    // euristica: conta gruppi vocalici inglesi
+    word = (word||"").toLowerCase().replace(/[^a-z]/g,"");
+    if (!word) return 0;
+    const groups = word.match(/[aeiouy]+/g);
+    let n = groups ? groups.length : 1;
+    // silent e
+    if (word.endsWith("e") && n > 1) n--;
+    return Math.max(1, n);
+  }
+
+  function readabilityScore(text, lang){
+    const words = segmentWords(text, lang);
+    const W = Math.max(1, words.length);
+    const S = Math.max(1, countSentences(text));
+    const L = countLetters(text);
+
+    if (lang === "it"){
+      // Gulpease: 89 + (300*S - 10*L)/W
+      const g = 89 + ((300*S) - (10*L)) / W;
+      return Math.round(g);
+    }
+    // EN: Flesch reading ease (heuristic syllables)
+    let syl = 0;
+    for (const w of words) syl += syllablesEn(w);
+    const fres = 206.835 - 1.015*(W/S) - 84.6*(syl/W);
+    return Math.round(fres);
+  }
+
+  /* =========================
+     Storage layer: IndexedDB + fallback localStorage
+     ========================= */
+  const DB_NAME = "speedread_v2_db";
+  const DB_VER = 2;
+  let db = null;
+  let storageMode = "idb"; // or "ls"
+
+  function reqDone(req){
+    return new Promise((resolve, reject)=>{
+      req.onsuccess = ()=> resolve(req.result);
+      req.onerror = ()=> reject(req.error);
+    });
+  }
+
+  function txDone(tx){
+    return new Promise((resolve, reject)=>{
+      tx.oncomplete = ()=> resolve();
+      tx.onabort = ()=> reject(tx.error || new Error("IndexedDB tx aborted"));
+      tx.onerror = ()=> reject(tx.error || new Error("IndexedDB tx error"));
+    });
+  }
+
+  async function openDB(){
+    return new Promise((resolve, reject)=>{
+      const r = indexedDB.open(DB_NAME, DB_VER);
+      r.onupgradeneeded = (ev)=>{
+        const d = r.result;
+        const old = ev.oldVersion || 0;
+
+        if (old < 1){
+          const users = d.createObjectStore("users", { keyPath:"id" });
+          users.createIndex("by_name","name",{ unique:false });
+          users.createIndex("by_createdAt","createdAt",{ unique:false });
+
+          const sessions = d.createObjectStore("sessions", { keyPath:"id" });
+          sessions.createIndex("by_userId","userId",{ unique:false });
+          sessions.createIndex("by_user_exercise_time", ["userId","exerciseType","startedAt"], { unique:false });
+        }
+        if (old < 2){
+          const texts = d.createObjectStore("texts_cache", { keyPath:"id" });
+          texts.createIndex("by_lang","lang",{ unique:false });
+          texts.createIndex("by_source","source",{ unique:false });
+          texts.createIndex("by_updatedAt","updatedAt",{ unique:false });
+
+          const state = d.createObjectStore("sync_state", { keyPath:"key" });
+          const outbox = d.createObjectStore("sync_outbox", { keyPath:"opId" });
+          outbox.createIndex("by_status","status",{ unique:false });
+          outbox.createIndex("by_createdAt","createdAt",{ unique:false });
+        }
+      };
+      r.onsuccess = ()=> resolve(r.result);
+      r.onerror = ()=> reject(r.error);
+    });
+  }
+
+  /* localStorage fallback */
+  const LS_KEY = "speedread_v2_fallback_blob";
+  function lsLoad(){
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return { users:[], sessions:[], texts_cache:[], sync_state:[], sync_outbox:[] };
+      const obj = JSON.parse(raw);
+      return { users:[], sessions:[], texts_cache:[], sync_state:[], sync_outbox:[], ...obj };
+    } catch(_){
+      return { users:[], sessions:[], texts_cache:[], sync_state:[], sync_outbox:[] };
+    }
+  }
+  function lsSave(obj){
+    localStorage.setItem(LS_KEY, JSON.stringify(obj));
+  }
+
+  /* =========================
+     DAO (works on both IDB and LS)
+     ========================= */
+  async function daoListUsers(){
+    if (storageMode === "ls"){
+      return lsLoad().users.slice().sort((a,b)=> (a.name||"").localeCompare(b.name||""));
+    }
+    const tx = db.transaction("users","readonly");
+    const s = tx.objectStore("users");
+    const all = await reqDone(s.getAll());
+    await txDone(tx);
+    return all.slice().sort((a,b)=> (a.name||"").localeCompare(b.name||""));
+  }
+
+  async function daoAddUser(name){
+    const user = { id: uuid(), name: name.trim(), createdAt: nowISO() };
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      blob.users.push(user);
+      lsSave(blob);
+      return user;
+    }
+    const tx = db.transaction("users","readwrite");
+    tx.objectStore("users").put(user);
+    await txDone(tx);
+    return user;
+  }
+
+  async function daoDeleteUser(userId){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      blob.users = blob.users.filter(u=>u.id !== userId);
+      blob.sessions = blob.sessions.filter(s=>s.userId !== userId);
+      lsSave(blob);
+      return;
+    }
+    // delete sessions for user
+    const sessions = await daoListSessions({ userId, exercise:"all" });
+    {
+      const tx = db.transaction("sessions","readwrite");
+      const st = tx.objectStore("sessions");
+      sessions.forEach(s=> st.delete(s.id));
+      await txDone(tx);
+    }
+    {
+      const tx = db.transaction("users","readwrite");
+      tx.objectStore("users").delete(userId);
+      await txDone(tx);
+    }
+  }
+
+  async function daoSaveSession(sess){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      const idx = blob.sessions.findIndex(x=>x.id===sess.id);
+      if (idx >= 0) blob.sessions[idx] = sess; else blob.sessions.push(sess);
+      lsSave(blob);
+      return;
+    }
+    const tx = db.transaction("sessions","readwrite");
+    tx.objectStore("sessions").put(sess);
+    await txDone(tx);
+  }
+
+  async function daoListSessions({ userId, exercise }){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      return blob.sessions
+        .filter(s=> s.userId===userId && (exercise==="all" ? true : s.exerciseType===exercise))
+        .sort((a,b)=> (a.startedAt||"").localeCompare(b.startedAt||""));
+    }
+    const tx = db.transaction("sessions","readonly");
+    const st = tx.objectStore("sessions");
+    const idx = st.index("by_userId");
+    const all = await reqDone(idx.getAll(userId));
+    await txDone(tx);
+    return all
+      .filter(s=> exercise==="all" ? true : s.exerciseType===exercise)
+      .sort((a,b)=> (a.startedAt||"").localeCompare(b.startedAt||""));
+  }
+
+  async function daoPutTextCache(entry){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      const idx = blob.texts_cache.findIndex(x=>x.id===entry.id);
+      if (idx>=0) blob.texts_cache[idx]=entry; else blob.texts_cache.push(entry);
+      lsSave(blob);
+      return;
+    }
+    const tx = db.transaction("texts_cache","readwrite");
+    tx.objectStore("texts_cache").put(entry);
+    await txDone(tx);
+  }
+
+  async function daoGetTextCacheByKey(cacheKey){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      return blob.texts_cache.find(x=>x.cacheKey===cacheKey) || null;
+    }
+    const tx = db.transaction("texts_cache","readonly");
+    const st = tx.objectStore("texts_cache");
+    const all = await reqDone(st.getAll());
+    await txDone(tx);
+    return all.find(x=>x.cacheKey===cacheKey) || null;
+  }
+
+  async function daoGetState(key){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      const it = blob.sync_state.find(x=>x.key===key);
+      return it ? it.value : null;
+    }
+    const tx = db.transaction("sync_state","readonly");
+    const st = tx.objectStore("sync_state");
+    const row = await reqDone(st.get(key));
+    await txDone(tx);
+    return row ? row.value : null;
+  }
+
+  async function daoSetState(key, value){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      const idx = blob.sync_state.findIndex(x=>x.key===key);
+      const row = { key, value };
+      if (idx>=0) blob.sync_state[idx]=row; else blob.sync_state.push(row);
+      lsSave(blob);
+      return;
+    }
+    const tx = db.transaction("sync_state","readwrite");
+    tx.objectStore("sync_state").put({ key, value });
+    await txDone(tx);
+  }
+
+  async function daoOutboxAdd(op){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      blob.sync_outbox.push(op);
+      lsSave(blob);
+      return;
+    }
+    const tx = db.transaction("sync_outbox","readwrite");
+    tx.objectStore("sync_outbox").put(op);
+    await txDone(tx);
+  }
+
+  async function daoOutboxList(status){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      return blob.sync_outbox.filter(x=>x.status===status).sort((a,b)=> (a.createdAt||"").localeCompare(b.createdAt||""));
+    }
+    const tx = db.transaction("sync_outbox","readonly");
+    const st = tx.objectStore("sync_outbox");
+    const idx = st.index("by_status");
+    const rows = await reqDone(idx.getAll(status));
+    await txDone(tx);
+    return rows.sort((a,b)=> (a.createdAt||"").localeCompare(b.createdAt||""));
+  }
+
+  async function daoOutboxMarkDone(opIds){
+    if (storageMode === "ls"){
+      const blob = lsLoad();
+      blob.sync_outbox = blob.sync_outbox.map(x=> opIds.includes(x.opId) ? ({...x, status:"done"}) : x);
+      lsSave(blob);
+      return;
+    }
+    const tx = db.transaction("sync_outbox","readwrite");
+    const st = tx.objectStore("sync_outbox");
+    for (const opId of opIds){
+      const row = await reqDone(st.get(opId));
+      if (row){
+        row.status = "done";
+        st.put(row);
+      }
+    }
+    await txDone(tx);
+  }
+
+  /* =========================
+     Offline texts (fallback)
+     ========================= */
+  const OFFLINE_TEXTS = {
+    it: [
+      { title:"Lettura e attenzione", text:"La lettura è un processo attivo: l’attenzione seleziona, integra e costruisce significato. Allenarsi significa misurare il tempo, controllare la comprensione e aumentare gradualmente la difficoltà. La velocità senza comprensione non è un obiettivo utile; la velocità con comprensione stabile, invece, migliora studio e lavoro." },
+      { title:"Tecnica e progressione", text:"Una buona progressione alterna esercizi di focalizzazione, lettura scorrevole e verifiche. L’uso di un pacer può ridurre regressioni oculari; il chunking aiuta a raggruppare parole in unità. Ogni sessione deve essere breve, tracciata, e seguita da un micro-quiz." }
+    ],
+    en: [
+      { title:"Reading and attention", text:"Reading is an active process: attention selects, integrates, and builds meaning. Training means measuring time, checking comprehension, and gradually raising difficulty. Speed without comprehension is not a useful goal; speed with stable comprehension improves study and work." },
+      { title:"Technique and progression", text:"A good progression alternates focus drills, smooth reading, and checks. A pacer can reduce backward eye movements; chunking helps group words into units. Each session should be short, tracked, and followed by a micro-quiz." }
+    ]
+  };
+
+  /* =========================
+     Wikipedia fetchers (Summary + Extracts)
+     ========================= */
+  async function fetchWikiSummary(lang, title){
+    const host = (lang === "en") ? "en.wikipedia.org" : "it.wikipedia.org";
+    const url = "https://" + host + "/api/rest_v1/page/summary/" + encodeURIComponent(title);
+    const r = await fetch(url, { headers: { "accept":"application/json" } });
+    if (!r.ok) throw new Error("Wikipedia summary: HTTP " + r.status);
+    const j = await r.json();
+    const text = (j.extract || "").trim();
+    const page = (j.content_urls && j.content_urls.desktop && j.content_urls.desktop.page) ? j.content_urls.desktop.page : "";
+    return {
+      text,
+      attribution: page ? ("Wikipedia (CC BY-SA) — " + page) : "Wikipedia (CC BY-SA)",
+      source: "wikipediaSummary"
+    };
+  }
+
+  async function fetchWikiExtracts(lang, title){
+    // API TextExtracts: prop=extracts + explaintext
+    const host = (lang === "en") ? "en.wikipedia.org" : "it.wikipedia.org";
+    const params = new URLSearchParams({
+      action: "query",
+      format: "json",
+      prop: "extracts",
+      explaintext: "1",
+      exsectionformat: "plain",
+      titles: title,
+      origin: "*" // spesso necessario in browser per CORS su api.php
+    });
+    const url = "https://" + host + "/w/api.php?" + params.toString();
+    const r = await fetch(url, { headers: { "accept":"application/json" } });
+    if (!r.ok) throw new Error("Wikipedia extracts: HTTP " + r.status);
+    const j = await r.json();
+    const pages = j && j.query && j.query.pages ? j.query.pages : {};
+    const firstKey = Object.keys(pages)[0];
+    const page = pages[firstKey];
+    const text = (page && page.extract) ? String(page.extract).trim() : "";
+    const pageUrl = "https://" + host + "/wiki/" + encodeURIComponent(title.replace(/ /g,"_"));
+    return {
+      text,
+      attribution: "Wikipedia (CC BY-SA) — " + pageUrl,
+      source: "wikipediaExtracts"
+    };
+  }
+
+  function sliceToWords(text, lang, target){
+    const w = segmentWords(text, lang);
+    if (w.length <= target) return text.trim();
+    return w.slice(0, target).join(" ") + "…";
+  }
+
+  /* =========================
+     Auto scaling
+     ========================= */
+  function clamp(n,a,b){ return Math.max(a, Math.min(b,n)); }
+
+  async function suggestDifficulty(userId){
+    const ex = $("exerciseSelect").value;
+    const sessions = await daoListSessions({ userId, exercise: ex });
+    if (!sessions.length) return { wpm: 240, len: 700, chunk: 3 };
+
+    const last = sessions[sessions.length - 1];
+    const acc = (typeof last.quizAcc === "number") ? last.quizAcc : 0.6;
+    const lastWpm = last.wpmTarget || 240;
+    const lastLen = last.textTargetLen || 700;
+    const lastChunk = last.chunkSize || 3;
+
+    const wpmDelta = acc >= 0.8 ? 30 : (acc >= 0.65 ? 12 : -18);
+    const lenDelta = acc >= 0.8 ? 160 : (acc >= 0.65 ? 80 : -120);
+    const chunkDelta = acc >= 0.85 ? 1 : 0;
+
+    return {
+      wpm: clamp(Math.round(lastWpm + wpmDelta), 120, 1100),
+      len: clamp(Math.round(lastLen + lenDelta), 150, 6000),
+      chunk: clamp(Math.round(lastChunk + chunkDelta), 1, 10)
+    };
+  }
+
+  /* =========================
+     Reader runtime
+     ========================= */
+  let currentUserId = null;
+  let currentText = "";
+  let currentLang = "it";
+  let currentWords = [];
+  let currentCx = 0;
+  let currentAttribution = "—";
+  let currentSource = "offline";
+  let currentTopic = "";
+  let currentCacheKey = "";
+  let session = null;
+
+  let timer = null;
+  let running = false;
+  let paused = false;
+  let idxWord = 0;
+
+  function setReaderMode(exercise){
+    $("pacer").style.display = (exercise === "pacer") ? "block" : "none";
+    $("rsvpWord").style.display = (exercise === "pacer") ? "none" : "block";
+  }
+
+  function renderPacer(words, index){
+    const start = Math.max(0, index - 60);
+    const end = Math.min(words.length, index + 140);
+    const chunk = [];
+    for (let i=start; i<end; i++){
+      const t = escapeHtml(words[i]);
+      if (i===index) chunk.push("<mark class='hl'>" + t + "</mark>");
+      else chunk.push(t);
+    }
+    $("pacer").innerHTML = chunk.join(" ");
+    $("pacer").scrollTop = $("pacer").scrollHeight;
+  }
+
+  function escapeHtml(s){
+    return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  }
+
+  function updateKpi(){
+    $("kpiCx").textContent = (currentCx || currentCx===0) ? String(currentCx) : "—";
+    $("kpiWords").textContent = session ? String(session.wordsRead || 0) : "—";
+    $("kpiWpm").textContent = session && session.effectiveWpm ? String(session.effectiveWpm) : "—";
+    $("kpiAcc").textContent = session && typeof session.quizAcc==="number" ? Math.round(session.quizAcc*100)+"%" : "—";
+  }
+
+  function setButtons(state){
+    // state: idle|ready|running|paused|stopped
+    if (state==="idle"){
+      $("btnStart").disabled = true;
+      $("btnPause").disabled = true;
+      $("btnStop").disabled = true;
+      $("btnQuiz").disabled = true;
+      return;
+    }
+    if (state==="ready"){
+      $("btnStart").disabled = false;
+      $("btnPause").disabled = true;
+      $("btnStop").disabled = true;
+      $("btnQuiz").disabled = true;
+      return;
+    }
+    if (state==="running"){
+      $("btnStart").disabled = true;
+      $("btnPause").disabled = false;
+      $("btnStop").disabled = false;
+      $("btnQuiz").disabled = true;
+      return;
+    }
+    if (state==="paused"){
+      $("btnStart").disabled = true;
+      $("btnPause").disabled = false;
+      $("btnStop").disabled = false;
+      $("btnQuiz").disabled = true;
+      return;
+    }
+    if (state==="stopped"){
+      $("btnStart").disabled = false;
+      $("btnPause").disabled = true;
+      $("btnStop").disabled = true;
+      $("btnQuiz").disabled = false;
+      return;
+    }
+  }
+
+  function startSession(){
+    if (!currentUserId || !currentWords.length) return;
+    const ex = $("exerciseSelect").value;
+    setReaderMode(ex);
+
+    running = true;
+    paused = false;
+    idxWord = 0;
+
+    const wpmTarget = Number($("wpmInput").value) || 240;
+    const msPerWord = Math.max(35, Math.round(60000 / clamp(wpmTarget, 60, 2000)));
+
+    session.startedAt = Date.now();
+    session.wordsRead = 0;
+
+    setButtons("running");
+    $("btnPause").textContent = "Pausa";
+    $("quizResult").textContent = "";
+    $("kpiAcc").textContent = "—";
+
+    timer = setInterval(()=>{
+      if (!running || paused) return;
+
+      if (idxWord >= currentWords.length){
+        stopSession(true);
+        return;
+      }
+
+      if (ex === "rsvp"){
+        $("rsvpWord").textContent = currentWords[idxWord];
+      } else if (ex === "chunk"){
+        const chunkSize = Number($("chunkInput").value) || 3;
+        const chunk = currentWords.slice(idxWord, idxWord + chunkSize).join(" ");
+        $("rsvpWord").textContent = chunk;
+        idxWord += (chunkSize - 1);
+      } else if (ex === "pacer"){
+        renderPacer(currentWords, idxWord);
+      }
+
+      idxWord++;
+      session.wordsRead = Math.min(idxWord, currentWords.length);
+      $("kpiWords").textContent = String(session.wordsRead);
+    }, msPerWord);
+  }
+
+  function pauseSession(){
+    if (!running) return;
+    paused = !paused;
+    $("btnPause").textContent = paused ? "Riprendi" : "Pausa";
+    setButtons(paused ? "paused" : "running");
+  }
+
+  async function stopSession(autoComplete){
+    if (timer) clearInterval(timer);
+    timer = null;
+    running = false;
+    paused = false;
+
+    session.endedAt = Date.now();
+    if (autoComplete) session.wordsRead = currentWords.length;
+
+    const elapsedMin = (session.endedAt - session.startedAt) / 60000;
+    session.effectiveWpm = elapsedMin > 0 ? Math.round(session.wordsRead / elapsedMin) : session.wpmTarget;
+
+    await daoSaveSession(session);
+    await daoOutboxAdd({
+      opId: uuid(),
+      kind: "session_upsert",
+      status: "pending",
+      createdAt: nowISO(),
+      payload: session
+    });
+
+    setButtons("stopped");
+    updateKpi();
+    await refreshChart();
+  }
+
+  /* =========================
+     Quiz: 3 cloze multiple-choice
+     ========================= */
+  function splitSentences(text){
+    const t = (text||"").replace(/\s+/g," ").trim();
+    if (!t) return [];
+    return t.split(/(?<=[.!?])\s+/).map(x=>x.trim()).filter(x=>x.length>=40);
+  }
+
+  function pickDistractors(words, correct, n){
+    const pool = Array.from(new Set(words.filter(w=>w.length>=4 && w.toLowerCase()!==correct.toLowerCase())));
+    for (let i=pool.length-1; i>0; i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool.slice(0, n);
+  }
+
+  async function runQuiz(){
+    if (!session || !currentText) return;
+
+    const sentences = splitSentences(currentText);
+    const words = segmentWords(currentText, currentLang).filter(w=>w.length>=4);
+    if (sentences.length < 2 || words.length < 30){
+      $("quizResult").textContent = "Testo troppo corto per generare quiz affidabile.";
+      session.quizAcc = 0.0;
+      await daoSaveSession(session);
+      await refreshChart();
+      updateKpi();
+      return;
+    }
+
+    let correctCount = 0;
+
+    for (let q=0; q<3; q++){
+      const s = sentences[Math.floor(Math.random()*sentences.length)];
+      const candidates = segmentWords(s, currentLang).filter(w=>w.length>=5);
+      const correct = candidates.length ? candidates[Math.floor(Math.random()*candidates.length)] : words[Math.floor(Math.random()*words.length)];
+
+      // maschera la prima occorrenza
+      const masked = s.replace(correct, "_____");
+
+      const distractors = pickDistractors(words, correct, 3);
+      const options = [correct, ...distractors].slice(0,4);
+
+      // shuffle
+      for (let i=options.length-1; i>0; i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [options[i], options[j]] = [options[j], options[i]];
+      }
+
+      const prompt =
+        "Domanda " + (q+1) + "/3\n\n" +
+        masked + "\n\n" +
+        options.map((o,i)=> (i+1)+") "+o).join("\n") +
+        "\n\nScrivi 1-4:";
+      const ans = (prompt ? window.prompt(prompt) : null);
+      const sel = Number(ans);
+      if (sel>=1 && sel<=4 && options[sel-1] === correct) correctCount++;
+    }
+
+    session.quizAcc = correctCount / 3;
+    await daoSaveSession(session);
+    $("quizResult").textContent = "Quiz: " + correctCount + "/3";
+    updateKpi();
+    await refreshChart();
+  }
+
+  /* =========================
+     Chart (fallback, canvas)
+     ========================= */
+  function drawLineChart(canvas, points, yLabel){
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth || 900;
+    const cssH = canvas.clientHeight || 260;
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+
+    ctx.clearRect(0,0,cssW,cssH);
+
+    // padding
+    const padL = 44, padR = 14, padT = 14, padB = 34;
+    const W = cssW - padL - padR;
+    const H = cssH - padT - padB;
+
+    // axes
+    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(127,127,127,.55)";
+    ctx.beginPath();
+    ctx.moveTo(padL, padT);
+    ctx.lineTo(padL, padT + H);
+    ctx.lineTo(padL + W, padT + H);
+    ctx.stroke();
+
+    // label
+    ctx.fillStyle = "rgba(127,127,127,.85)";
+    ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillText(yLabel, padL, cssH - 10);
+
+    if (!points.length){
+      ctx.fillStyle = "rgba(127,127,127,.75)";
+      ctx.fillText("Nessun dato ancora.", padL + 10, padT + 20);
+      return;
+    }
+
+    const ys = points.map(p=>p.y);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const spanY = (maxY - minY) || 1;
+
+    // gridlines (3)
+    for (let i=0; i<=3; i++){
+      const y = padT + (H * i/3);
+      ctx.strokeStyle = "rgba(127,127,127,.18)";
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(padL+W, y);
+      ctx.stroke();
+
+      const val = Math.round(maxY - spanY*(i/3));
+      ctx.fillStyle = "rgba(127,127,127,.65)";
+      ctx.fillText(String(val), 6, y+4);
+    }
+
+    // line
+    ctx.strokeStyle = "rgba(43,108,255,.95)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    points.forEach((p,i)=>{
+      const x = padL + (W * (points.length===1 ? 0 : (i/(points.length-1))));
+      const y = padT + (H * (1 - ((p.y - minY)/spanY)));
+      if (i===0) ctx.moveTo(x,y);
+      else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+
+    // points
+    ctx.fillStyle = "rgba(43,108,255,.95)";
+    points.forEach((p,i)=>{
+      const x = padL + (W * (points.length===1 ? 0 : (i/(points.length-1))));
+      const y = padT + (H * (1 - ((p.y - minY)/spanY)));
+      ctx.beginPath();
+      ctx.arc(x,y,3,0,Math.PI*2);
+      ctx.fill();
+    });
+  }
+
+  async function refreshChart(){
+    if (!currentUserId) return;
+    const metric = $("metricSelect").value;
+    const filter = $("filterExercise").value;
+    const sess = await daoListSessions({ userId: currentUserId, exercise: filter==="all" ? "all" : filter });
+
+    const points = sess.map((s, idx)=>{
+      let y = 0;
+      if (metric==="wpm") y = Number(s.effectiveWpm || s.wpmTarget || 0);
+      if (metric==="acc") y = Math.round(100 * (typeof s.quizAcc==="number" ? s.quizAcc : 0));
+      if (metric==="cx") y = Number(s.textCx || 0);
+      return { x: idx, y };
+    });
+
+    const yLabel = metric==="wpm" ? "WPM" : metric==="acc" ? "Accuratezza (%)" : "Leggibilità";
+    drawLineChart($("chart"), points, yLabel);
+  }
+
+  /* =========================
+     Export / Import (plain or encrypted)
+     ========================= */
+  function ab2b64(buf){
+    const bytes = new Uint8Array(buf);
+    let s = "";
+    for (let i=0;i<bytes.length;i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+  }
+  function b642ab(b64){
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.buffer;
+  }
+  async function deriveKeyPBKDF2(pass, salt){
+    const enc = new TextEncoder();
+    const baseKey = await crypto.subtle.importKey("raw", enc.encode(pass), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      { name:"PBKDF2", salt, iterations: 200000, hash:"SHA-256" },
+      baseKey,
+      { name:"AES-GCM", length: 256 },
+      false,
+      ["encrypt","decrypt"]
+    );
+  }
+  async function encryptJson(pass, obj){
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKeyPBKDF2(pass, salt);
+    const enc = new TextEncoder();
+    const data = enc.encode(JSON.stringify(obj));
+    const ct = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, key, data);
+    return {
+      v: 1,
+      alg: "PBKDF2-SHA256/AES-256-GCM",
+      salt: ab2b64(salt.buffer),
+      iv: ab2b64(iv.buffer),
+      ct: ab2b64(ct)
+    };
+  }
+  async function decryptJson(pass, blob){
+    const salt = new Uint8Array(b642ab(blob.salt));
+    const iv = new Uint8Array(b642ab(blob.iv));
+    const ct = b642ab(blob.ct);
+    const key = await deriveKeyPBKDF2(pass, salt);
+    const pt = await crypto.subtle.decrypt({ name:"AES-GCM", iv }, key, ct);
+    const dec = new TextDecoder();
+    return JSON.parse(dec.decode(pt));
+  }
+
+  async function exportAll(){
+    const pass = window.prompt("Password per cifrare export (lascia vuoto per export non cifrato):") || "";
+    let dump;
+
+    if (storageMode === "ls"){
+      dump = lsLoad();
+    } else {
+      // read all stores
+      dump = { users:[], sessions:[], texts_cache:[], sync_state:[], sync_outbox:[] };
+      for (const storeName of ["users","sessions","texts_cache","sync_state","sync_outbox"]){
+        const tx = db.transaction(storeName,"readonly");
+        const all = await reqDone(tx.objectStore(storeName).getAll());
+        await txDone(tx);
+        dump[storeName] = all;
+      }
+    }
+
+    const payload = pass.trim() ? await encryptJson(pass.trim(), dump) : dump;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = pass.trim() ? "speedread_backup.encrypted.json" : "speedread_backup.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importAll(){
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = "application/json";
+    inp.onchange = async ()=>{
+      const file = inp.files && inp.files[0];
+      if (!file) return;
+      const text = await file.text();
+      let obj = JSON.parse(text);
+
+      // detect encrypted
+      if (obj && obj.alg && obj.ct && obj.salt && obj.iv){
+        const pass = window.prompt("Inserisci password per decifrare backup:") || "";
+        obj = await decryptJson(pass, obj);
+      }
+
+      if (!obj || !obj.users || !obj.sessions){
+        alert("Backup non valido.");
+        return;
+      }
+
+      if (storageMode === "ls"){
+        lsSave(obj);
+      } else {
+        // overwrite stores (simple approach)
+        for (const storeName of ["users","sessions","texts_cache","sync_state","sync_outbox"]){
+          const tx = db.transaction(storeName,"readwrite");
+          const st = tx.objectStore(storeName);
+          const existing = await reqDone(st.getAllKeys());
+          existing.forEach(k=> st.delete(k));
+          (obj[storeName] || []).forEach(row=> st.put(row));
+          await txDone(tx);
+        }
+      }
+
+      await loadUsersIntoUI();
+      await refreshChart();
+      alert("Import completato.");
+    };
+    inp.click();
+  }
+
+  /* =========================
+     Sync client (optional)
+     ========================= */
+  let syncToken = null;
+
+  async function login(){
+    const base = ($("syncUrl").value || "").trim();
+    if (!base) { $("syncStatus").textContent = "Configura Server URL"; return; }
+    const email = ($("syncEmail").value || "").trim();
+    const password = ($("syncPassword").value || "").trim();
+
+    $("syncStatus").textContent = "Login…";
+    const r = await fetch(base + "/api/auth/login", {
+      method:"POST",
+      headers:{ "content-type":"application/json" },
+      body: JSON.stringify({ email, password })
+    });
+    if (!r.ok){
+      $("syncStatus").textContent = "Login failed (HTTP " + r.status + ")";
+      return;
+    }
+    const j = await r.json();
+    syncToken = j.token;
+    await daoSetState("syncToken", syncToken);
+    $("syncStatus").textContent = "Login OK";
+  }
+
+  async function syncNow(){
+    const base = ($("syncUrl").value || "").trim();
+    if (!base) { $("syncStatus").textContent = "Configura Server URL"; return; }
+    if (!syncToken){
+      syncToken = await daoGetState("syncToken");
+    }
+    if (!syncToken) { $("syncStatus").textContent = "Fai login"; return; }
+
+    // ensure deviceId
+    let deviceId = await daoGetState("deviceId");
+    if (!deviceId){
+      deviceId = uuid();
+      await daoSetState("deviceId", deviceId);
+    }
+
+    $("syncStatus").textContent = "Push…";
+
+    const pending = await daoOutboxList("pending");
+    const ops = pending.map(x=>x);
+
+    const pushRes = await fetch(base + "/api/sync/push", {
+      method:"POST",
+      headers:{
+        "content-type":"application/json",
+        "authorization":"Bearer " + syncToken
+      },
+      body: JSON.stringify({ deviceId, ops })
+    });
+
+    if (!pushRes.ok){
+      $("syncStatus").textContent = "Push failed (HTTP " + pushRes.status + ")";
+      return;
+    }
+    const pushJson = await pushRes.json();
+    await daoOutboxMarkDone(pushJson.acked || []);
+
+    $("syncStatus").textContent = "Pull…";
+    const since = await daoGetState("lastPull") || "1970-01-01T00:00:00.000Z";
+    const pullRes = await fetch(base + "/api/sync/pull?since=" + encodeURIComponent(since), {
+      headers:{ "authorization":"Bearer " + syncToken }
+    });
+    if (!pullRes.ok){
+      $("syncStatus").textContent = "Pull failed (HTTP " + pullRes.status + ")";
+      return;
+    }
+    const pullJson = await pullRes.json();
+
+    // merge sessions (append-only: upsert by id)
+    for (const s of (pullJson.sessions || [])){
+      await daoSaveSession(s);
+    }
+    await daoSetState("lastPull", pullJson.now || nowISO());
+
+    $("syncStatus").textContent = "Sync OK";
+    await refreshChart();
+  }
+
+  /* =========================
+     UI wiring FIRST (robust init)
+     ========================= */
+  function wireUI(){
+    $("btnAddUser").addEventListener("click", async ()=>{
+      const name = ($("newUserName").value || "").trim();
+      if (!name) return alert("Inserisci un nome utente.");
+      await daoAddUser(name);
+      $("newUserName").value = "";
+      await loadUsersIntoUI();
+    });
+
+    $("btnDeleteUser").addEventListener("click", async ()=>{
+      if (!currentUserId) return;
+      if (!confirm("Eliminare utente e tutte le sue sessioni?")) return;
+      await daoDeleteUser(currentUserId);
+      currentUserId = null;
+      await loadUsersIntoUI();
+      await refreshChart();
+    });
+
+    $("userSelect").addEventListener("change", async ()=>{
+      currentUserId = $("userSelect").value || null;
+      await refreshChart();
+      await applyAutoIfNeeded();
+    });
+
+    $("exerciseSelect").addEventListener("change", async ()=>{
+      setReaderMode($("exerciseSelect").value);
+      await applyAutoIfNeeded();
+      await refreshChart();
+    });
+
+    $("goalMode").addEventListener("change", async ()=>{
+      await applyAutoIfNeeded();
+    });
+
+    $("btnLoadText").addEventListener("click", async ()=>{
+      await loadTextFlow();
+    });
+
+    $("btnStart").addEventListener("click", ()=> startSession());
+    $("btnPause").addEventListener("click", ()=> pauseSession());
+    $("btnStop").addEventListener("click", async ()=> stopSession(false));
+    $("btnQuiz").addEventListener("click", async ()=> runQuiz());
+
+    $("metricSelect").addEventListener("change", refreshChart);
+    $("filterExercise").addEventListener("change", refreshChart);
+
+    $("btnToggleSidebar").addEventListener("click", ()=>{
+      document.body.classList.toggle("sidebarCollapsed");
+    });
+
+    $("btnExport").addEventListener("click", exportAll);
+    $("btnImport").addEventListener("click", importAll);
+
+    $("btnLogin").addEventListener("click", login);
+    $("btnSyncNow").addEventListener("click", syncNow);
+    $("btnSync").addEventListener("click", ()=>{
+      // porta focus alla sezione sync (semplice)
+      $("syncUrl").focus();
+    });
+  }
+
+  /* =========================
+     Sidebar resizer (accessible)
+     ========================= */
+  function initSplitter(){
+    const splitter = $("splitter");
+    const min = 280; // px
+    const max = 540; // px
+
+    // restore
+    const saved = localStorage.getItem("sidebarW");
+    if (saved){
+      const v = clamp(Number(saved), min, max);
+      document.documentElement.style.setProperty("--sidebar-w", v + "px");
+    }
+
+    let dragging = false;
+
+    splitter.addEventListener("pointerdown", (e)=>{
+      dragging = true;
+      splitter.setPointerCapture(e.pointerId);
+    });
+    splitter.addEventListener("pointerup", ()=> dragging = false);
+    splitter.addEventListener("pointercancel", ()=> dragging = false);
+    splitter.addEventListener("pointermove", (e)=>{
+      if (!dragging) return;
+      const x = e.clientX;
+      const v = clamp(x - 16 /*padding left*/, min, max);
+      document.documentElement.style.setProperty("--sidebar-w", v + "px");
+      localStorage.setItem("sidebarW", String(v));
+    });
+
+    splitter.addEventListener("keydown", (e)=>{
+      const step = e.shiftKey ? 24 : 12;
+      const cur = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-w")) || 352;
+      if (e.key === "ArrowLeft"){
+        const v = clamp(cur - step, min, max);
+        document.documentElement.style.setProperty("--sidebar-w", v + "px");
+        localStorage.setItem("sidebarW", String(v));
+        e.preventDefault();
+      }
+      if (e.key === "ArrowRight"){
+        const v = clamp(cur + step, min, max);
+        document.documentElement.style.setProperty("--sidebar-w", v + "px");
+        localStorage.setItem("sidebarW", String(v));
+        e.preventDefault();
+      }
+    });
+  }
+
+  /* =========================
+     Text load flow with cache
+     ========================= */
+  async function applyAutoIfNeeded(){
+    if (!$("goalMode").value || $("goalMode").value !== "auto") return;
+    if (!currentUserId) return;
+    const sugg = await suggestDifficulty(currentUserId);
+    $("wpmInput").value = sugg.wpm;
+    $("lenInput").value = sugg.len;
+    $("chunkInput").value = sugg.chunk;
+  }
+
+  async function loadTextFlow(){
+    if (!currentUserId) return alert("Seleziona o crea un utente.");
+    currentLang = $("langSelect").value === "en" ? "en" : "it";
+    const source = $("sourceSelect").value;
+    const topic = ($("topicInput").value || "").trim() || (currentLang==="en" ? "Reading" : "Lettura");
+
+    // auto/manual
+    if ($("goalMode").value === "auto"){
+      const s = await suggestDifficulty(currentUserId);
+      $("wpmInput").value = s.wpm;
+      $("lenInput").value = s.len;
+      $("chunkInput").value = s.chunk;
+    }
+    const wpmTarget = Number($("wpmInput").value) || 240;
+    const targetLen = Number($("lenInput").value) || 700;
+
+    currentSource = source;
+    currentTopic = topic;
+    currentCacheKey = source + "|" + currentLang + "|" + topic.toLowerCase();
+
+    // try cache first if offline or previous exists
+    const cached = await daoGetTextCacheByKey(currentCacheKey);
+
+    let fetched = null;
+    let usedCache = false;
+
+    try{
+      if (source === "offline"){
+        const bucket = OFFLINE_TEXTS[currentLang];
+        const chosen = bucket[Math.floor(Math.random()*bucket.length)];
+        fetched = { text: chosen.text, attribution: "Offline demo text — " + chosen.title, source:"offline" };
+      } else if (source === "wikipediaSummary"){
+        fetched = await fetchWikiSummary(currentLang, topic);
+      } else if (source === "wikipediaExtracts"){
+        fetched = await fetchWikiExtracts(currentLang, topic);
+      }
+    } catch(e){
+      if (cached && cached.text){
+        fetched = { text: cached.text, attribution: cached.attribution || "Cache", source: cached.source || source };
+        usedCache = true;
+      } else {
+        alert("Errore fetch e nessuna cache disponibile:\n" + (e.message || String(e)));
+        return;
+      }
+    }
+
+    const rawText = (fetched.text || "").trim();
+    if (!rawText || rawText.length < 120){
+      if (cached && cached.text){
+        fetched.text = cached.text;
+        fetched.attribution = cached.attribution || fetched.attribution;
+        usedCache = true;
+      } else {
+        alert("Testo troppo corto o vuoto. Prova un altro argomento.");
+        return;
+      }
+    }
+
+    const sliced = sliceToWords(rawText, currentLang, targetLen);
+
+    currentText = sliced;
+    currentWords = segmentWords(sliced, currentLang);
+    currentCx = readabilityScore(sliced, currentLang);
+    currentAttribution = fetched.attribution || "—";
+
+    $("attribution").textContent = currentAttribution;
+    $("cacheInfo").textContent = usedCache ? "usata cache (fallback)" : (cached ? "fetch + cache aggiornata" : "fetch + cache creata");
+
+    // update cache
+    await daoPutTextCache({
+      id: cached ? cached.id : uuid(),
+      cacheKey: currentCacheKey,
+      lang: currentLang,
+      source: fetched.source,
+      topic: topic,
+      text: currentText,
+      attribution: currentAttribution,
+      updatedAt: nowISO()
+    });
+
+    // prepare session
+    session = {
+      id: uuid(),
+      userId: currentUserId,
+      lang: currentLang,
+      exerciseType: $("exerciseSelect").value,
+      source: fetched.source,
+      topic: topic,
+      attribution: currentAttribution,
+      textTargetLen: targetLen,
+      textLen: currentWords.length,
+      textCx: currentCx,
+      wpmTarget: wpmTarget,
+      chunkSize: Number($("chunkInput").value) || 3,
+      startedAt: null,
+      endedAt: null,
+      wordsRead: 0,
+      effectiveWpm: 0,
+      quizAcc: null,
+      createdAt: nowISO()
+    };
+
+    // render preview
+    setReaderMode(session.exerciseType);
+    if (session.exerciseType === "pacer"){
+      renderPacer(currentWords, 0);
+    } else if (session.exerciseType === "chunk"){
+      const cs = session.chunkSize;
+      $("rsvpWord").textContent = currentWords.slice(0, cs).join(" ");
+    } else {
+      $("rsvpWord").textContent = currentWords[0] || "—";
+    }
+
+    $("kpiCx").textContent = String(currentCx);
+    $("kpiWords").textContent = "0";
+    $("kpiWpm").textContent = String(wpmTarget);
+    $("kpiAcc").textContent = "—";
+    $("quizResult").textContent = "";
+
+    setButtons("ready");
+  }
+
+  /* =========================
+     Init
+     ========================= */
+  async function loadUsersIntoUI(){
+    const users = await daoListUsers();
+    const sel = $("userSelect");
+    sel.innerHTML = "";
+
+    if (!users.length){
+      currentUserId = null;
+      setButtons("idle");
+      $("rsvpWord").textContent = "Crea un utente per iniziare.";
+      return;
+    }
+    for (const u of users){
+      const opt = document.createElement("option");
+      opt.value = u.id;
+      opt.textContent = u.name;
+      sel.appendChild(opt);
+    }
+
+    if (!currentUserId || !users.some(u=>u.id===currentUserId)){
+      currentUserId = users[0].id;
+    }
+    sel.value = currentUserId;
+    await applyAutoIfNeeded();
+  }
+
+  async function init(){
+    wireUI();       // 1) handler sempre registrati
+    initSplitter(); // 2) UI resizer sempre attivo
+
+    // Open DB
+    try{
+      db = await openDB();
+      storageMode = "idb";
+    } catch(e){
+      storageMode = "ls";
+      $("bannerStorage").style.display = "block";
+    }
+
+    // Ensure at least one user
+    const users = await daoListUsers();
+    if (!users.length){
+      await daoAddUser("Utente 1");
+    }
+
+    await loadUsersIntoUI();
+    await refreshChart();
+    setReaderMode($("exerciseSelect").value);
+    setButtons("idle");
+
+    // restore token
+    syncToken = await daoGetState("syncToken");
+  }
+
+  init().catch((e)=>{
+    alert("Init error: " + (e && e.message ? e.message : String(e)));
+  });
+
+})();
+</script>
+</body>
+</html>
