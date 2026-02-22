@@ -29,6 +29,14 @@ const STOPWORDS = {
   en: new Set(["the","a","an","of","to","in","on","for","and","or","that","with","as","at","by","from","is","are","was","were","be","been","this","these","those","it","its","not","more","than"])
 };
 
+function defaultUserSettings(){
+  return {
+    reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"" },
+    span: { ms: 800, font:110, profile: defaultSpanProfile() },
+    fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki", customText:"" },
+  };
+}
+
 // ---------- utilities ----------
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -96,11 +104,7 @@ function defaultState(){
         name: "Luca",
         createdAt: nowIso(),
         sessions: [],
-        settings: {
-          reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"" },
-          span: { ms: 800, font:110, profile: defaultSpanProfile() },
-          fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki", customText:"" },
-        }
+        settings: defaultUserSettings()
       }
     ],
     textCache: { it: null, en: null },
@@ -122,12 +126,13 @@ function migrateState(st){
   if(!st.textCache) st.textCache = { it:null, en:null };
   if(!st.ui) st.ui = { pacerFont: 18, debug: false };
 
+  const defaults = defaultUserSettings();
   for(const u of st.users){
     if(!u.sessions) u.sessions = [];
-    if(!u.settings || typeof u.settings !== "object") u.settings = JSON.parse(JSON.stringify(defaultState().users[0].settings));
-    u.settings.reader = ensureObject(u.settings.reader, JSON.parse(JSON.stringify(defaultState().users[0].settings.reader)));
-    u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaultState().users[0].settings.span)));
-    u.settings.fixation = ensureObject(u.settings.fixation, JSON.parse(JSON.stringify(defaultState().users[0].settings.fixation)));
+    if(!u.settings || typeof u.settings !== "object") u.settings = JSON.parse(JSON.stringify(defaults));
+    u.settings.reader = ensureObject(u.settings.reader, JSON.parse(JSON.stringify(defaults.reader)));
+    u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
+    u.settings.fixation = ensureObject(u.settings.fixation, JSON.parse(JSON.stringify(defaults.fixation)));
     if(typeof u.settings.reader.customText !== "string") u.settings.reader.customText = "";
     if(typeof u.settings.fixation.customText !== "string") u.settings.fixation.customText = "";
     if(!u.settings.span.profile){
@@ -929,8 +934,9 @@ const Span = {
 
 function getSpanProfile(){
   const u = getActiveUser();
-  u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaultState().users[0].settings)));
-  u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaultState().users[0].settings.span)));
+  const defaults = defaultUserSettings();
+  u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaults)));
+  u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
   u.settings.span.profile = normalizeSpanProfile(u.settings.span.profile || {});
   return u.settings.span.profile;
 }
@@ -1420,8 +1426,9 @@ function bindSpan(){
     $("#"+id).addEventListener("change", ()=>{
       spanApplyFont();
       const u = getActiveUser();
-      u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaultState().users[0].settings)));
-      u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaultState().users[0].settings.span)));
+      const defaults = defaultUserSettings();
+      u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaults)));
+      u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
       u.settings.span.ms = Number($("#spanMs").value)||800;
       u.settings.span.font = Number($("#spanFont").value)||110;
       saveState();
@@ -1493,7 +1500,7 @@ function applyUserSettingsToForm(){
   $("#readerCustomText").value = rs.customText || "";
 
   const spl = computeSpanLevel(u);
-  const sp = u.settings.span || defaultState().users[0].settings.span;
+  const sp = u.settings.span || defaultUserSettings().span;
   sp.profile = normalizeSpanProfile(sp.profile || {});
   $("#spanMs").value = String(clamp(Number(sp.ms ?? spl.ms), 40, 3000));
   $("#spanFont").value = String(sp.font ?? 110);
