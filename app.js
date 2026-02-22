@@ -53,6 +53,10 @@ function safeParseJson(s){
   try { return JSON.parse(s); } catch { return null; }
 }
 
+function ensureObject(value, fallback){
+  return (value && typeof value === "object" && !Array.isArray(value)) ? value : fallback;
+}
+
 function wordsOf(text){
   return text
     .replace(/\s+/g, " ")
@@ -120,10 +124,10 @@ function migrateState(st){
 
   for(const u of st.users){
     if(!u.sessions) u.sessions = [];
-    if(!u.settings) u.settings = defaultState().users[0].settings;
-    if(!u.settings.reader) u.settings.reader = defaultState().users[0].settings.reader;
-    if(!u.settings.span) u.settings.span = defaultState().users[0].settings.span;
-    if(!u.settings.fixation) u.settings.fixation = defaultState().users[0].settings.fixation;
+    if(!u.settings || typeof u.settings !== "object") u.settings = JSON.parse(JSON.stringify(defaultState().users[0].settings));
+    u.settings.reader = ensureObject(u.settings.reader, JSON.parse(JSON.stringify(defaultState().users[0].settings.reader)));
+    u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaultState().users[0].settings.span)));
+    u.settings.fixation = ensureObject(u.settings.fixation, JSON.parse(JSON.stringify(defaultState().users[0].settings.fixation)));
     if(typeof u.settings.reader.customText !== "string") u.settings.reader.customText = "";
     if(typeof u.settings.fixation.customText !== "string") u.settings.fixation.customText = "";
     if(!u.settings.span.profile){
@@ -925,6 +929,8 @@ const Span = {
 
 function getSpanProfile(){
   const u = getActiveUser();
+  u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaultState().users[0].settings)));
+  u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaultState().users[0].settings.span)));
   u.settings.span.profile = normalizeSpanProfile(u.settings.span.profile || {});
   return u.settings.span.profile;
 }
@@ -942,18 +948,6 @@ function renderSpanStatus(){
 function spanGenerate(){
   const p = getSpanProfile();
   return generateSpanStimulus({ stage: p.currentStage, length: p.currentLength });
-}
-
-function spanSelectAdaptiveConfig(){
-  const u = getActiveUser();
-  const elo = normalizeUserRating(u.settings.span?.elo || {});
-  const item = selectNextItem({ userRating: elo, itemPool: buildSpanItemPool() });
-  if(!item) return;
-  $("#spanLen").value = String(item.length);
-  $("#spanAz").checked = !!item.charset.az;
-  $("#spanAZ").checked = !!item.charset.AZ;
-  $("#span09").checked = !!item.charset.n09;
-  $("#spanUS").checked = !!item.charset.us;
 }
 
 function spanApplyFont(){
