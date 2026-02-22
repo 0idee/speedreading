@@ -944,6 +944,18 @@ function spanGenerate(){
   return generateSpanStimulus({ stage: p.currentStage, length: p.currentLength });
 }
 
+function spanSelectAdaptiveConfig(){
+  const u = getActiveUser();
+  const elo = normalizeUserRating(u.settings.span?.elo || {});
+  const item = selectNextItem({ userRating: elo, itemPool: buildSpanItemPool() });
+  if(!item) return;
+  $("#spanLen").value = String(item.length);
+  $("#spanAz").checked = !!item.charset.az;
+  $("#spanAZ").checked = !!item.charset.AZ;
+  $("#span09").checked = !!item.charset.n09;
+  $("#spanUS").checked = !!item.charset.us;
+}
+
 function spanApplyFont(){
   const pct = clamp(Number($("#spanFont").value)||110, 70, 220);
   $("#spanStimulus").style.fontSize = `${Math.round(54*(pct/110))}px`;
@@ -974,6 +986,7 @@ function spanStartSessionIfNeeded(){
 
 function spanNewTrial(){
   spanStartSessionIfNeeded();
+  spanSelectAdaptiveConfig();
   spanApplyFont();
   $("#spanResult").textContent = "";
   $("#spanInput").value = "";
