@@ -98,7 +98,7 @@ function defaultState(){
         sessions: [],
         settings: {
           reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"" },
-          span: { ms: 250, font:110, profile: defaultSpanProfile() },
+          span: { ms: 800, font:110, profile: defaultSpanProfile() },
           fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki", customText:"" },
         }
       }
@@ -419,7 +419,7 @@ function computeSpanLevel(user){
   const profile = normalizeSpanProfile(user.settings?.span?.profile || {});
   return {
     level: profile.currentStage,
-    ms: user.settings?.span?.ms ?? 250,
+    ms: user.settings?.span?.ms ?? 800,
     len: profile.currentLength,
   };
 }
@@ -964,7 +964,7 @@ function spanStartSessionIfNeeded(){
     startedAt: nowIso(),
     endedAt: null,
     config: {
-      ms: Number($("#spanMs").value)||250,
+      ms: Number($("#spanMs").value)||800,
       font: Number($("#spanFont").value)||110,
       startStage: profile.currentStage,
       startLength: profile.currentLength,
@@ -986,7 +986,7 @@ function spanNewTrial(){
   $("#spanInput").value = "";
   $("#spanInput").focus();
 
-  const ms = clamp(Number($("#spanMs").value)||250, 40, 3000);
+  const ms = clamp(Number($("#spanMs").value)||800, 40, 3000);
   const stim = spanGenerate();
   Span.current = stim;
   Span.shownAt = performance.now();
@@ -1420,7 +1420,9 @@ function bindSpan(){
     $("#"+id).addEventListener("change", ()=>{
       spanApplyFont();
       const u = getActiveUser();
-      u.settings.span.ms = Number($("#spanMs").value)||250;
+      u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaultState().users[0].settings)));
+      u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaultState().users[0].settings.span)));
+      u.settings.span.ms = Number($("#spanMs").value)||800;
       u.settings.span.font = Number($("#spanFont").value)||110;
       saveState();
     });
@@ -1493,7 +1495,7 @@ function applyUserSettingsToForm(){
   const spl = computeSpanLevel(u);
   const sp = u.settings.span || defaultState().users[0].settings.span;
   sp.profile = normalizeSpanProfile(sp.profile || {});
-  $("#spanMs").value = String(sp.ms ?? spl.ms);
+  $("#spanMs").value = String(clamp(Number(sp.ms ?? spl.ms), 40, 3000));
   $("#spanFont").value = String(sp.font ?? 110);
   spanApplyFont();
   renderSpanStatus();
