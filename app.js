@@ -1,9 +1,9 @@
-import { normalizeUserRating, computeItemRating, updateUserRating, selectNextItem, buildSpanItemPool } from "./elo.js";
+import { defaultSpanProfile, normalizeSpanProfile, generateSpanStimulus, evaluateSpanAttempt, updateSpanProgress, pushSpanRollingResult } from "./visual-span.js";
 // SpeedRead Trainer V2 (no build tools, Brave-friendly)
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
 const APP_KEY = "speedread_trainer_v2_state";
-const APP_VERSION = 4;
+const APP_VERSION = 5;
 
 const EXERCISES = {
   reader: { id: "reader", name: "Lettura veloce" },
@@ -94,7 +94,7 @@ function defaultState(){
         sessions: [],
         settings: {
           reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"" },
-          span: { ms: 250, len: 4, az:true, AZ:true, n09:true, us:true, font:110, elo: { R_user: 1000, RD_user: 250 } },
+          span: { ms: 250, font:110, profile: defaultSpanProfile() },
           fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki", customText:"" },
         }
       }
@@ -126,7 +126,11 @@ function migrateState(st){
     if(!u.settings.fixation) u.settings.fixation = defaultState().users[0].settings.fixation;
     if(typeof u.settings.reader.customText !== "string") u.settings.reader.customText = "";
     if(typeof u.settings.fixation.customText !== "string") u.settings.fixation.customText = "";
-    u.settings.span.elo = normalizeUserRating(u.settings.span.elo || {});
+    if(!u.settings.span.profile){
+      u.settings.span.profile = defaultSpanProfile();
+      if(Number.isFinite(u.settings.span.len)) u.settings.span.profile.currentLength = clamp(Number(u.settings.span.len), 4, 14);
+    }
+    u.settings.span.profile = normalizeSpanProfile(u.settings.span.profile);
 
     // Fix the bug that caused: (a.startedAt||"").localeCompare is not a function
     // Ensure startedAt/endedAt are ISO strings (or null), not numbers/objects.
@@ -408,16 +412,12 @@ function computeReaderLevel(user){
 }
 
 function computeSpanLevel(user){
-  const ss = sessionsByExercise(user, "span").slice(-8);
-  const acc = ss.map(s=>s.metrics?.accuracy).filter(Number.isFinite);
-  const tries = ss.map(s=>s.metrics?.tries).filter(Number.isFinite);
-  const a = median(acc);
-  const t = median(tries) || 0;
-  if(!a) return { level: 1, ms: 260, len: 4 };
-  const level = clamp(Math.round(a*6 + t/5), 1, 10);
-  const ms = clamp(Math.round(320 - level*18), 90, 3000);
-  const len = clamp(Math.round(3 + level/1.8), 3, 12);
-  return { level, ms, len };
+  const profile = normalizeSpanProfile(user.settings?.span?.profile || {});
+  return {
+    level: profile.currentStage,
+    ms: user.settings?.span?.ms ?? 250,
+    len: profile.currentLength,
+  };
 }
 
 function computeFixLevel(user){
@@ -923,26 +923,25 @@ const Span = {
   hideTimer: null,
 };
 
-function spanChars(){
-  const az = $("#spanAz").checked;
-  const AZ = $("#spanAZ").checked;
-  const n09 = $("#span09").checked;
-  const us = $("#spanUS").checked;
-  let pool = [];
-  if(us) pool.push("_");
-  if(n09) pool = pool.concat("0123456789".split(""));
-  if(AZ) pool = pool.concat("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""));
-  if(az) pool = pool.concat("abcdefghijklmnopqrstuvwxyz".split(""));
-  if(!pool.length) pool = pool.concat("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""));
-  return pool;
+function getSpanProfile(){
+  const u = getActiveUser();
+  u.settings.span.profile = normalizeSpanProfile(u.settings.span.profile || {});
+  return u.settings.span.profile;
+}
+
+function setSpanProfile(profile){
+  const u = getActiveUser();
+  u.settings.span.profile = normalizeSpanProfile(profile);
+}
+
+function renderSpanStatus(){
+  const p = getSpanProfile();
+  $("#spanStatus").textContent = `Livello: Stage ${p.currentStage} · ${p.currentLength} caratteri`;
 }
 
 function spanGenerate(){
-  const len = clamp(Number($("#spanLen").value)||4, 1, 12);
-  const pool = spanChars();
-  let s = "";
-  for(let i=0;i<len;i++) s += pool[Math.floor(Math.random()*pool.length)];
-  return s;
+  const p = getSpanProfile();
+  return generateSpanStimulus({ stage: p.currentStage, length: p.currentLength });
 }
 
 function spanSelectAdaptiveConfig(){
@@ -964,6 +963,7 @@ function spanApplyFont(){
 
 function spanStartSessionIfNeeded(){
   if(Span.session) return;
+  const profile = getSpanProfile();
   Span.session = {
     id: uid(),
     exerciseId: "span",
@@ -971,12 +971,9 @@ function spanStartSessionIfNeeded(){
     endedAt: null,
     config: {
       ms: Number($("#spanMs").value)||250,
-      len: Number($("#spanLen").value)||4,
-      az: $("#spanAz").checked,
-      AZ: $("#spanAZ").checked,
-      n09: $("#span09").checked,
-      us: $("#spanUS").checked,
-      font: Number($("#spanFont").value)||110
+      font: Number($("#spanFont").value)||110,
+      startStage: profile.currentStage,
+      startLength: profile.currentLength,
     },
     metrics: {},
     notes: {},
@@ -984,6 +981,7 @@ function spanStartSessionIfNeeded(){
   Span.tries = 0;
   Span.correct = 0;
   $("#spanScore").textContent = "Score: 0/0";
+  renderSpanStatus();
 }
 
 function spanNewTrial(){
@@ -1011,13 +1009,22 @@ function spanNewTrial(){
 function spanCheck(){
   if(!Span.session || !Span.current) return;
   const typed = ($("#spanInput").value||"").trim();
+  const ok = evaluateSpanAttempt(Span.current, typed);
   Span.tries += 1;
-  const ok = (typed === Span.current);
   if(ok) Span.correct += 1;
+
+  let profile = getSpanProfile();
+  profile = updateSpanProgress(profile, ok, { successStreakToGrow: 3 });
+  profile = pushSpanRollingResult(profile, { ok, at: nowIso() });
+  profile.lastSessionAt = nowIso();
+  setSpanProfile(profile);
+
   $("#spanResult").innerHTML = ok
     ? `<span style="color: var(--good); font-weight: 800;">buono:</span> ${Span.current}`
     : `<span style="color: var(--bad); font-weight: 800;">era:</span> ${Span.current}`;
   $("#spanScore").textContent = `Score: ${Span.correct}/${Span.tries}`;
+  renderSpanStatus();
+  saveState();
   Span.current = null;
 }
 
@@ -1025,35 +1032,24 @@ function spanEndSession(){
   if(!Span.session) return;
   Span.session.endedAt = nowIso();
   const acc = Span.tries ? (Span.correct/Span.tries) : null;
+  const profile = getSpanProfile();
   Span.session.metrics = {
     accuracy: Number.isFinite(acc) ? acc : null,
     score: `${Span.correct}/${Span.tries}`,
     tries: Span.tries,
+    stage: profile.currentStage,
+    length: profile.currentLength,
+  };
+  Span.session.notes = {
+    restartPoint: `Stage ${profile.currentStage} · ${profile.currentLength} caratteri`,
+    best: `Stage ${profile.bestStageReached} · ${profile.bestLengthReached} caratteri`,
   };
   addSessionToUser(Span.session);
-  const u = getActiveUser();
-  const currElo = normalizeUserRating(u.settings.span?.elo || {});
-  const itemCfg = {
-    length: Number($("#spanLen").value)||4,
-    charset: { az: $("#spanAz").checked, AZ: $("#spanAZ").checked, n09: $("#span09").checked, us: $("#spanUS").checked }
-  };
-  const R_item = computeItemRating(itemCfg);
-  const eloNext = updateUserRating({
-    R_user: currElo.R_user,
-    RD_user: currElo.RD_user,
-    R_item,
-    score: Number.isFinite(acc) ? acc : 0.5,
-  });
-  u.settings.span.elo = { R_user: Math.round(eloNext.R_user), RD_user: Math.round(eloNext.RD_user) };
 
-  const lvl = computeSpanLevel(u);
-  u.settings.span.ms = lvl.ms;
-  u.settings.span.len = lvl.len;
-  saveState();
+  $("#spanResult").textContent = `Record: Stage ${profile.bestStageReached} · ${profile.bestLengthReached}. Ripartenza: Stage ${profile.currentStage} · ${profile.currentLength}.`;
   Span.session = null;
   Span.tries = 0;
   Span.correct = 0;
-  $("#spanResult").textContent = "";
   $("#spanStimulus").style.visibility = "visible";
   $("#spanStimulus").textContent = "—";
   $("#spanScore").textContent = "Score: 0/0";
@@ -1426,19 +1422,12 @@ function bindSpan(){
     spanHandleEnterAction();
   });
 
-  ["spanMs","spanLen","spanAz","spanAZ","span09","spanUS","spanFont"].forEach(id=>{
+  ["spanMs","spanFont"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       spanApplyFont();
       const u = getActiveUser();
-      u.settings.span = {
-        ms: Number($("#spanMs").value)||250,
-        len: Number($("#spanLen").value)||4,
-        az: $("#spanAz").checked,
-        AZ: $("#spanAZ").checked,
-        n09: $("#span09").checked,
-        us: $("#spanUS").checked,
-        font: Number($("#spanFont").value)||110
-      };
+      u.settings.span.ms = Number($("#spanMs").value)||250;
+      u.settings.span.font = Number($("#spanFont").value)||110;
       saveState();
     });
   });
@@ -1509,15 +1498,11 @@ function applyUserSettingsToForm(){
 
   const spl = computeSpanLevel(u);
   const sp = u.settings.span || defaultState().users[0].settings.span;
-  sp.elo = normalizeUserRating(sp.elo || {});
+  sp.profile = normalizeSpanProfile(sp.profile || {});
   $("#spanMs").value = String(sp.ms ?? spl.ms);
-  $("#spanLen").value = String(sp.len ?? spl.len);
-  $("#spanAz").checked = !!sp.az;
-  $("#spanAZ").checked = !!sp.AZ;
-  $("#span09").checked = !!sp.n09;
-  $("#spanUS").checked = !!sp.us;
   $("#spanFont").value = String(sp.font ?? 110);
   spanApplyFont();
+  renderSpanStatus();
 
   const fxl = computeFixLevel(u);
   const fx = u.settings.fixation || defaultState().users[0].settings.fixation;

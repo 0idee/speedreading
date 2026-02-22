@@ -176,7 +176,7 @@
         <!-- Span -->
         <section class="card view hidden" data-view="span">
           <div class="card-head">
-            <h2>Ampliamento campo visivo (alfanumerico)</h2>
+            <h2>Ampliamento campo visivo</h2>
             <div class="row gap">
               <button class="btn" id="btnSpanNew">Nuova prova</button>
               <button class="btn secondary" id="btnSpanCheck">Verifica</button>
@@ -187,7 +187,7 @@
           <div class="card-body exercise-body">
             <div class="exercise-layout">
               <div class="card inner settings-panel">
-                <div class="card-title">Impostazioni</div>
+                <div class="card-title">Impostazioni automatiche</div>
 
                 <div class="grid-2 tight">
                   <label class="field">
@@ -195,32 +195,13 @@
                     <input id="spanMs" type="number" min="40" max="3000" step="10" value="250" />
                   </label>
                   <label class="field">
-                    <span>Caratteri</span>
-                    <input id="spanLen" type="number" min="1" max="12" step="1" value="4" />
-                  </label>
-                  <label class="field">
-                    <span>a-z</span>
-                    <input id="spanAz" type="checkbox" checked />
-                  </label>
-                  <label class="field">
-                    <span>A-Z</span>
-                    <input id="spanAZ" type="checkbox" checked />
-                  </label>
-                  <label class="field">
-                    <span>0-9</span>
-                    <input id="span09" type="checkbox" checked />
-                  </label>
-                  <label class="field">
-                    <span>_</span>
-                    <input id="spanUS" type="checkbox" checked />
-                  </label>
-                  <label class="field">
                     <span>Font (%)</span>
                     <input id="spanFont" type="number" min="70" max="220" step="10" value="110" />
                   </label>
                 </div>
 
-                <div class="muted small" id="spanScore" style="margin-top: 10px;">Score: 0/0</div>
+                <div id="spanStatus" class="muted small" style="margin-top: 10px;">Livello: Stage 1 · 4 caratteri</div>
+                <div class="muted small" id="spanScore" style="margin-top: 6px;">Score: 0/0</div>
               </div>
 
               <div class="card inner display-panel">
