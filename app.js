@@ -986,6 +986,7 @@ function spanStartSessionIfNeeded(){
 
 function spanNewTrial(){
   spanStartSessionIfNeeded();
+  spanSelectAdaptiveConfig();
   spanApplyFont();
   $("#spanResult").textContent = "";
   $("#spanInput").value = "";
