@@ -986,7 +986,7 @@ function spanStartSessionIfNeeded(){
 
 function spanNewTrial(){
   spanStartSessionIfNeeded();
-  spanSelectAdaptiveConfig();
+  if(Span.hideTimer) clearTimeout(Span.hideTimer);
   spanApplyFont();
   $("#spanResult").textContent = "";
   $("#spanInput").value = "";
@@ -1395,6 +1395,21 @@ function bindReader(){
   });
 }
 
+function withSpanGuard(action){
+  try{
+    action();
+  }catch(err){
+    console.error("Campo visivo error:", err);
+    const out = $("#spanResult");
+    if(out) out.textContent = `Errore Campo visivo: ${err?.message || err}`;
+    const stim = $("#spanStimulus");
+    if(stim){
+      stim.style.visibility = "visible";
+      stim.textContent = "⚠";
+    }
+  }
+}
+
 function spanHandleEnterAction(){
   if(Span.current){
     spanCheck();
@@ -1404,13 +1419,13 @@ function spanHandleEnterAction(){
 }
 
 function bindSpan(){
-  $("#btnSpanNew").addEventListener("click", spanNewTrial);
-  $("#btnSpanCheck").addEventListener("click", spanCheck);
-  $("#btnSpanEnd").addEventListener("click", spanEndSession);
+  $("#btnSpanNew").addEventListener("click", ()=> withSpanGuard(spanNewTrial));
+  $("#btnSpanCheck").addEventListener("click", ()=> withSpanGuard(spanCheck));
+  $("#btnSpanEnd").addEventListener("click", ()=> withSpanGuard(spanEndSession));
   $("#spanInput").addEventListener("keydown", (e)=>{
     if(e.key==="Enter" || e.key==="NumpadEnter"){
       e.preventDefault();
-      spanHandleEnterAction();
+      withSpanGuard(spanHandleEnterAction);
     }
   });
   document.addEventListener("keydown", (e)=>{
@@ -1419,7 +1434,7 @@ function bindSpan(){
     if(spanView?.classList.contains("hidden")) return;
     if(document.activeElement?.id === "spanInput") return;
     e.preventDefault();
-    spanHandleEnterAction();
+    withSpanGuard(spanHandleEnterAction);
   });
 
   ["spanMs","spanFont"].forEach(id=>{
