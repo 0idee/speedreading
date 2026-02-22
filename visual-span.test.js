@@ -72,3 +72,11 @@ test('stage promotion requires two qualifying streaks at L>=10', () => {
   assert.equal(p.currentStage, 2);
   assert.equal(p.currentLength, 8);
 });
+
+test('persistence restart keeps saved stage and length', () => {
+  const p = normalizeSpanProfile({ currentStage: 3, currentLength: 9, bestStageReached: 4, bestLengthReached: 12 });
+  assert.equal(p.currentStage, 3);
+  assert.equal(p.currentLength, 9);
+  assert.equal(p.bestStageReached, 4);
+  assert.equal(p.bestLengthReached, 12);
+});

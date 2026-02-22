@@ -1,4 +1,5 @@
 import { defaultSpanProfile, normalizeSpanProfile, generateSpanStimulus, evaluateSpanAttempt, updateSpanProgress, pushSpanRollingResult } from "./visual-span.js";
+import { defaultAdaptiveProfile, normalizeAdaptiveProfile, updateGlickoLite, targetItemRating, selectCandidate, pushRollingResult, rollingAccuracy } from "./adaptive-glicko.js";
 // SpeedRead Trainer V2 (no build tools, Brave-friendly)
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
@@ -31,9 +32,9 @@ const STOPWORDS = {
 
 function defaultUserSettings(){
   return {
-    reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"" },
+    reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"", profile: defaultAdaptiveProfile({ exposureMs: 250, stimulusSize: 8, complexity: 1.0 }) },
     span: { ms: 800, font:110, profile: defaultSpanProfile() },
-    fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki", customText:"" },
+    fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki", customText:"", profile: defaultAdaptiveProfile({ holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 }) },
   };
 }
 
@@ -135,6 +136,8 @@ function migrateState(st){
     u.settings.fixation = ensureObject(u.settings.fixation, JSON.parse(JSON.stringify(defaults.fixation)));
     if(typeof u.settings.reader.customText !== "string") u.settings.reader.customText = "";
     if(typeof u.settings.fixation.customText !== "string") u.settings.fixation.customText = "";
+    u.settings.reader.profile = normalizeAdaptiveProfile(u.settings.reader.profile, { exposureMs: 250, stimulusSize: 8, complexity: 1.0 });
+    u.settings.fixation.profile = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
     if(!u.settings.span.profile){
       u.settings.span.profile = defaultSpanProfile();
       if(Number.isFinite(u.settings.span.len)) u.settings.span.profile.currentLength = clamp(Number(u.settings.span.len), 4, 14);
@@ -443,6 +446,43 @@ function computeFixLevel(user){
     laps: clamp(1 + Math.floor(level/3), 1, 8),
     rows: clamp(8 + Math.floor(level/2), 8, 16),
   };
+}
+
+
+function readerItemRating(params){
+  const size0 = 8;
+  const ms0 = 250;
+  const a = 40;
+  const b = 300;
+  const c = 1.2;
+  return 1000 + a * ((params.stimulusSize ?? size0) - size0) + b * ((params.complexity ?? 1.0) - 1.0) + c * (ms0 - (params.exposureMs ?? ms0));
+}
+
+function fixationItemRating(params){
+  const hold0 = 600, size0 = 24, d0 = 2, amp0 = 1.0;
+  const a=35,b=25,c=40,d=80,e=120;
+  return 1000
+    + a * (((params.holdMs ?? hold0) - hold0)/100)
+    + b * ((size0 - (params.targetSizePx ?? size0))/5)
+    + c * ((params.distractorCount ?? d0) - d0)
+    + d * ((params.amplitude ?? amp0) - amp0)
+    + e * (params.motionFlag ? 1 : 0);
+}
+
+function applyReaderAdaptiveParams(user){
+  const p = normalizeAdaptiveProfile(user.settings.reader.profile, { exposureMs:250, stimulusSize:8, complexity:1.0 });
+  user.settings.reader.profile = p;
+  const wpm = clamp(Math.round(60000 / clamp(p.currentParams.exposureMs ?? 250, 80, 600)), 100, 1200);
+  user.settings.reader.wpm = wpm;
+  user.settings.reader.chunk = clamp(Math.round(p.currentParams.stimulusSize ?? 8), 1, 20);
+}
+
+function applyFixAdaptiveParams(user){
+  const p = normalizeAdaptiveProfile(user.settings.fixation.profile, { holdMs:600, targetSizePx:24, distractorCount:2, amplitude:1.0, motionFlag:0 });
+  user.settings.fixation.profile = p;
+  user.settings.fixation.ms = clamp(Math.round(p.currentParams.holdMs ?? 600), 50, 3000);
+  user.settings.fixation.cols = clamp(Math.round((p.currentParams.distractorCount ?? 2) + 1), 1, 8);
+  user.settings.fixation.rows = clamp(Math.round(8 + (p.currentParams.amplitude ?? 1.0) * 4), 6, 16);
 }
 
 function fmtSessionLabel(s){
@@ -911,9 +951,36 @@ function readerStop(completed=false){
     addSessionToUser(Reader.session);
     if(completed){
       const u = getActiveUser();
-      const lvl = computeReaderLevel(u);
-      u.settings.reader.wpm = lvl.baseWpm;
-      u.settings.reader.minWords = lvl.minWords;
+      let prof = normalizeAdaptiveProfile(u.settings.reader.profile, { exposureMs: 250, stimulusSize: 8, complexity: 1.0 });
+      const S = Number.isFinite(accuracy) ? clamp(accuracy, 0, 1) : 0;
+      const curr = prof.currentParams;
+      const currItem = readerItemRating(curr);
+      const upd = updateGlickoLite({ R_user: prof.R_user, RD_user: prof.RD_user, R_item: currItem, S });
+      prof.R_user = upd.R_user;
+      prof.RD_user = upd.RD_user;
+      prof.attempts_count += 1;
+      prof.lastSessionAt = nowIso();
+      prof = pushRollingResult(prof, S, { at: nowIso(), params: curr });
+      const ra = rollingAccuracy(prof.rollingResults);
+      if(ra !== null){
+        if(ra < 0.45) prof.fatigueBias = -5;
+        else if(ra > 0.90) prof.fatigueBias = 5;
+        else prof.fatigueBias = 0;
+      }
+      const target = targetItemRating(prof.R_user, prof.RD_user) + prof.fatigueBias * 10;
+      const cands = [];
+      for(const dMs of [-25,0,25]) for(const dSz of [-1,0,1]) for(const dCx of [-0.05,0,0.05]){
+        cands.push({
+          exposureMs: clamp((curr.exposureMs ?? 250) + dMs, 80, 600),
+          stimulusSize: clamp((curr.stimulusSize ?? 8) + dSz, 4, 20),
+          complexity: clamp((curr.complexity ?? 1.0) + dCx, 1.0, 1.5),
+        });
+      }
+      const next = selectCandidate({ currentParams: curr, candidates: cands, itemRating: readerItemRating, targetRating: target }) || curr;
+      prof.currentParams = next;
+      if(readerItemRating(next) > readerItemRating(prof.bestParams)) prof.bestParams = { ...next };
+      u.settings.reader.profile = prof;
+      applyReaderAdaptiveParams(u);
       saveState();
     }
   }
@@ -1259,10 +1326,41 @@ function fixStop(completed=false){
     addSessionToUser(Fix.session);
     if(completed){
       const u = getActiveUser();
-      const lvl = computeFixLevel(u);
-      u.settings.fixation.ms = lvl.ms;
-      u.settings.fixation.laps = lvl.laps;
-      u.settings.fixation.rows = lvl.rows;
+      let prof = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
+      const S = completed ? 1 : 0;
+      const curr = prof.currentParams;
+      const currItem = fixationItemRating(curr);
+      const upd = updateGlickoLite({ R_user: prof.R_user, RD_user: prof.RD_user, R_item: currItem, S });
+      prof.R_user = upd.R_user;
+      prof.RD_user = upd.RD_user;
+      prof.attempts_count += 1;
+      prof.lastSessionAt = nowIso();
+      prof = pushRollingResult(prof, S, { at: nowIso(), params: curr });
+      const ra = rollingAccuracy(prof.rollingResults);
+      if(ra !== null){
+        if(ra < 0.45) prof.fatigueBias = -5;
+        else if(ra > 0.90) prof.fatigueBias = 5;
+        else prof.fatigueBias = 0;
+      }
+      const target = targetItemRating(prof.R_user, prof.RD_user) + prof.fatigueBias * 10;
+      const cands = [];
+      for(const dH of [-100,0,100]) for(const dS of [-2,0,2]) for(const dD of [-1,0,1]) for(const dA of [-0.1,0,0.1]){
+        cands.push({
+          holdMs: clamp((curr.holdMs ?? 600)+dH, 300, 2000),
+          targetSizePx: clamp((curr.targetSizePx ?? 24)+dS, 10, 40),
+          distractorCount: clamp((curr.distractorCount ?? 2)+dD, 0, 8),
+          amplitude: clamp((curr.amplitude ?? 1.0)+dA, 0.5, 2.0),
+          motionFlag: curr.motionFlag ?? 0,
+        });
+      }
+      if(prof.attempts_count % 5 === 0){
+        cands.push({ ...curr, motionFlag: curr.motionFlag ? 0 : 1 });
+      }
+      const next = selectCandidate({ currentParams: curr, candidates: cands, itemRating: fixationItemRating, targetRating: target }) || curr;
+      prof.currentParams = next;
+      if(fixationItemRating(next) > fixationItemRating(prof.bestParams)) prof.bestParams = { ...next };
+      u.settings.fixation.profile = prof;
+      applyFixAdaptiveParams(u);
       saveState();
     }
     Fix.session = null;
@@ -1504,8 +1602,9 @@ function bindSettings(){
 function applyUserSettingsToForm(){
   const u = getActiveUser();
 
+  applyReaderAdaptiveParams(u);
   const lvl = computeReaderLevel(u);
-  const rs = u.settings.reader || defaultState().users[0].settings.reader;
+  const rs = u.settings.reader || defaultUserSettings().reader;
   $("#readerLang").value = rs.lang || "it";
   $("#readerMode").value = rs.mode || "rsvp";
   $("#readerWpm").value = String(rs.wpm ?? lvl.baseWpm);
@@ -1522,8 +1621,9 @@ function applyUserSettingsToForm(){
   spanApplyFont();
   renderSpanStatus();
 
+  applyFixAdaptiveParams(u);
   const fxl = computeFixLevel(u);
-  const fx = u.settings.fixation || defaultState().users[0].settings.fixation;
+  const fx = u.settings.fixation || defaultUserSettings().fixation;
   $("#fixMs").value = String(fx.ms ?? fxl.ms);
   $("#fixLaps").value = String(fx.laps ?? fxl.laps);
   $("#fixCols").value = String(fx.cols ?? 3);
