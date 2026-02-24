@@ -63,7 +63,9 @@
               <button class="btn secondary" id="btnQuickStart">Avvia lettura</button>
               <button class="btn secondary" id="btnExport">Esporta</button>
               <button class="btn secondary" id="btnImport">Importa</button>
+            <div class="badge" id="fixWpm">— WPM</div>
             </div>
+            <div></div>
           </div>
           <div class="card-body exercise-body">
             <div class="exercise-layout">
@@ -221,13 +223,15 @@
 
         <!-- Fixation -->
         <section class="card view hidden" data-view="fixation">
-          <div class="card-head">
+          <div class="card-head fixation-head">
             <h2>Punti di fissità</h2>
-            <div class="row gap">
-              <button class="btn" id="btnFixStart">Start</button>
-              <button class="btn secondary" id="btnFixPause">Pausa</button>
-              <button class="btn danger" id="btnFixStop">Stop</button>
+            <div class="row gap fixation-actions">
+              <button class="btn" id="btnFixStart" type="button">Start</button>
+              <button class="btn secondary" id="btnFixPause" type="button">Pausa</button>
+              <button class="btn danger" id="btnFixStop" type="button">Stop</button>
+              <div class="badge" id="fixWpm">— WPM</div>
             </div>
+            <div></div>
           </div>
 
           <div class="card-body exercise-body">
@@ -256,7 +260,7 @@
 
                   <label class="field">
                     <span>Righe</span>
-                    <input id="fixRows" type="number" min="4" max="16" step="1" value="10" />
+                    <input id="fixRows" type="number" min="4" max="250" step="1" value="10" />
                   </label>
 
                   <label class="field">

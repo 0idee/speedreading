@@ -1135,6 +1135,8 @@ const Fix = {
   total:0,
   segs:[],
   session:null,
+  currentMs:250,
+  lapsCompleted:0,
 };
 
 function fixBuildGrid(cols, rows, segs, mode){
@@ -1186,6 +1188,25 @@ function fixUpdateTimer(){
   $("#fixTimer").textContent = fmtTime(elapsed);
 }
 
+function fixComputeWpm(ms){
+  const segLen = clamp(Number($("#fixSegLen").value)||20, 10, 80);
+  const wordsPerStimulus = Math.max(1, segLen/6);
+  const wpm = (60000 / Math.max(50, ms)) * wordsPerStimulus;
+  return Math.round(wpm);
+}
+
+function fixRenderSpeedBadge(){
+  const ms = Math.max(50, Math.round(Fix.currentMs || Number($("#fixMs").value) || 250));
+  const wpm = fixComputeWpm(ms);
+  const el = $("#fixWpm");
+  if(el) el.textContent = `${wpm} WPM`;
+}
+
+function fixSetCurrentMs(ms){
+  Fix.currentMs = clamp(Math.round(ms), 50, 3000);
+  fixRenderSpeedBadge();
+}
+
 function fixActivate(i){
   const grid = $("#fixGrid");
   const prev = grid.querySelector(".fix-cell.active");
@@ -1208,13 +1229,17 @@ async function fixLoadText(){
   setTextCache(lang, info);
   const segs = splitIntoSegments(info.text, segLen);
   Fix.segs = segs;
-  $("#fixStatus").textContent = `Testo pronto: ${info.wordCount} parole`;
+  const neededRows = Math.max(4, Math.ceil(segs.length / Math.max(1, cols)));
+  if(neededRows > rows){
+    $("#fixRows").value = String(neededRows);
+  }
+  $("#fixStatus").textContent = `Testo pronto: ${info.wordCount} parole • righe consigliate: ${neededRows}`;
 }
 
 function fixPrepare(){
   const mode = $("#fixMode").value;
   const cols = Number($("#fixCols").value);
-  const rows = Number($("#fixRows").value);
+  let rows = Number($("#fixRows").value);
 
   // ensure grid exists
   if(mode==="text"){
@@ -1226,6 +1251,11 @@ function fixPrepare(){
     }
     const segLen = Number($("#fixSegLen").value)||20;
     Fix.segs = splitIntoSegments(cached.text, segLen);
+    const neededRows = Math.max(4, Math.ceil(Fix.segs.length / Math.max(1, cols)));
+    if(neededRows > rows){
+      rows = neededRows;
+      $("#fixRows").value = String(rows);
+    }
     fixBuildGrid(cols, rows, Fix.segs, "text");
   }else{
     fixBuildGrid(cols, rows, [], "dots");
@@ -1245,9 +1275,11 @@ function fixStart(){
   const ms = clamp(Number($("#fixMs").value)||250, 50, 3000);
   const laps = clamp(Number($("#fixLaps").value)||2, 1, 50);
   Fix.lapsLeft = laps;
+  Fix.lapsCompleted = 0;
   Fix.running = true;
   Fix.paused = false;
   Fix.startedPerf = performance.now();
+  fixSetCurrentMs(ms);
 
   Fix.session = {
     id: uid(),
@@ -1270,23 +1302,33 @@ function fixStart(){
 
   $("#fixStatus").textContent = "In corso…";
 
-  Fix.timerId = setInterval(()=>{
+  const tick = ()=>{
     if(!Fix.running) return;
     fixUpdateTimer();
-    if(Fix.paused) return;
+    if(Fix.paused){
+      Fix.timerId = setTimeout(tick, 80);
+      return;
+    }
 
     fixActivate(Fix.index);
-    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri rimasti: ${Fix.lapsLeft}`;
+    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri rimasti: ${Fix.lapsLeft} • ${Math.round(Fix.currentMs)}ms`;
 
     Fix.index += 1;
     if(Fix.index >= Fix.total){
       Fix.index = 0;
       Fix.lapsLeft -= 1;
+      Fix.lapsCompleted += 1;
+      fixSetCurrentMs(Fix.currentMs - 10);
       if(Fix.lapsLeft <= 0){
         fixStop(true);
+        return;
       }
     }
-  }, ms);
+
+    Fix.timerId = setTimeout(tick, Math.max(50, Math.round(Fix.currentMs)));
+  };
+
+  Fix.timerId = setTimeout(tick, Math.max(50, Math.round(Fix.currentMs)));
 }
 
 function fixPauseToggle(){
@@ -1304,7 +1346,7 @@ function fixPauseToggle(){
 
 function fixStop(completed=false){
   if(!Fix.running) return;
-  clearInterval(Fix.timerId);
+  clearTimeout(Fix.timerId);
   Fix.timerId = null;
 
   if(!Fix.paused && Fix.startedPerf != null){
@@ -1324,18 +1366,19 @@ function fixStop(completed=false){
       score: completed ? "OK" : "STOP",
     };
     addSessionToUser(Fix.session);
+    const u = getActiveUser();
+    let prof = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
+    const S = completed ? 1 : 0;
+    const curr = prof.currentParams;
+    const currItem = fixationItemRating(curr);
+    const upd = updateGlickoLite({ R_user: prof.R_user, RD_user: prof.RD_user, R_item: currItem, S });
+    prof.R_user = upd.R_user;
+    prof.RD_user = upd.RD_user;
+    prof.attempts_count += 1;
+    prof.lastSessionAt = nowIso();
+    prof = pushRollingResult(prof, S, { at: nowIso(), params: curr, stopped: !completed });
+
     if(completed){
-      const u = getActiveUser();
-      let prof = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
-      const S = completed ? 1 : 0;
-      const curr = prof.currentParams;
-      const currItem = fixationItemRating(curr);
-      const upd = updateGlickoLite({ R_user: prof.R_user, RD_user: prof.RD_user, R_item: currItem, S });
-      prof.R_user = upd.R_user;
-      prof.RD_user = upd.RD_user;
-      prof.attempts_count += 1;
-      prof.lastSessionAt = nowIso();
-      prof = pushRollingResult(prof, S, { at: nowIso(), params: curr });
       const ra = rollingAccuracy(prof.rollingResults);
       if(ra !== null){
         if(ra < 0.45) prof.fatigueBias = -5;
@@ -1359,10 +1402,19 @@ function fixStop(completed=false){
       const next = selectCandidate({ currentParams: curr, candidates: cands, itemRating: fixationItemRating, targetRating: target }) || curr;
       prof.currentParams = next;
       if(fixationItemRating(next) > fixationItemRating(prof.bestParams)) prof.bestParams = { ...next };
-      u.settings.fixation.profile = prof;
-      applyFixAdaptiveParams(u);
-      saveState();
+    }else{
+      // user pressed Stop because comprehension dropped: offer a slower starting speed next time
+      prof.currentParams = {
+        ...curr,
+        holdMs: clamp((curr.holdMs ?? 600) + 80, 300, 2200),
+      };
+      $("#fixStatus").textContent = "Interrotto: al prossimo avvio partirai un po' più lento.";
     }
+
+    u.settings.fixation.profile = prof;
+    applyFixAdaptiveParams(u);
+    $("#fixMs").value = String(clamp(Number(u.settings.fixation.ms)||250, 50, 3000));
+    saveState();
     Fix.session = null;
   }
   rerenderDashboard();
@@ -1549,6 +1601,7 @@ function bindSpan(){
   });
 }
 
+
 function bindFix(){
   $("#btnFixLoadText").addEventListener("click", ()=> fixLoadText().catch(err=>{
     $("#fixStatus").textContent = `Errore: ${err.message}`;
@@ -1560,6 +1613,7 @@ function bindFix(){
   ["fixMs","fixLaps","fixCols","fixRows","fixMode","fixSegLen","fixLang","fixSource","fixCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
+      const prevProfile = u.settings?.fixation?.profile;
       u.settings.fixation = {
         ms: Number($("#fixMs").value)||250,
         laps: Number($("#fixLaps").value)||2,
@@ -1570,7 +1624,9 @@ function bindFix(){
         lang: $("#fixLang").value,
         source: $("#fixSource").value,
         customText: $("#fixCustomText").value || "",
+        profile: normalizeAdaptiveProfile(prevProfile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 }),
       };
+      fixSetCurrentMs(Number($("#fixMs").value)||250);
       saveState();
     });
   });
@@ -1625,6 +1681,7 @@ function applyUserSettingsToForm(){
   const fxl = computeFixLevel(u);
   const fx = u.settings.fixation || defaultUserSettings().fixation;
   $("#fixMs").value = String(fx.ms ?? fxl.ms);
+  fixSetCurrentMs(Number($("#fixMs").value)||250);
   $("#fixLaps").value = String(fx.laps ?? fxl.laps);
   $("#fixCols").value = String(fx.cols ?? 3);
   $("#fixRows").value = String(fx.rows ?? fxl.rows);
