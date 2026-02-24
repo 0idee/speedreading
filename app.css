@@ -59,35 +59,34 @@ code{font-family:var(--mono)}
 
 .layout{
   display:grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 1fr;
   gap: var(--gap);
   padding: var(--gap);
   align-items:start;
 }
 
-@media (max-width: 980px){
-  .layout{grid-template-columns: 1fr}
-  .sidebar{position:relative}
-}
-
-.sidebar{
+.dashboard-ribbon{
   position:sticky;
   top:70px;
-  display:flex;
-  flex-direction:column;
+  z-index:15;
+  display:grid;
+  grid-template-columns: minmax(360px, 2fr) minmax(210px, 1fr) minmax(210px, 1fr);
   gap: var(--gap);
-  padding-bottom: 10px;
+  align-items:stretch;
+}
+
+@media (max-width: 980px){
+  .dashboard-ribbon{grid-template-columns: 1fr}
 }
 
 .nav{
   display:flex;
-  flex-direction:column;
+  flex-wrap:wrap;
   gap:10px;
 }
 
 .nav-item{
   text-align:left;
-  width:100%;
   padding:12px 12px;
   border-radius: 14px;
   border:1px solid rgba(38,49,72,.85);
@@ -99,6 +98,9 @@ code{font-family:var(--mono)}
 }
 .nav-item:hover{transform: translateY(-1px); border-color: rgba(122,162,255,.35)}
 .nav-item.active{background: rgba(122,162,255,.14); border-color: rgba(122,162,255,.45)}
+@media (min-width: 981px){
+  .nav-item{width:auto}
+}
 
 .content{min-width:0}
 .grid{
@@ -163,6 +165,65 @@ input, select{
 }
 input[type="checkbox"]{width:auto; padding:0; height:18px}
 select{cursor:pointer}
+
+textarea{
+  width:100%;
+  padding:10px 10px;
+  border-radius: 12px;
+  border:1px solid rgba(38,49,72,.95);
+  background: rgba(10,14,22,.75);
+  color: var(--text);
+  outline: none;
+  resize: vertical;
+  font-family: var(--sans);
+}
+
+.grid-span-2{grid-column: 1 / -1}
+
+.exercise-body{padding:12px}
+.exercise-layout{
+  display:grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap:12px;
+  align-items:start;
+}
+.settings-panel{width:100%}
+.display-panel{min-width:0}
+@media (max-width: 980px){
+  .exercise-layout{grid-template-columns: 1fr}
+}
+
+.fixation-layout{
+  grid-template-columns: 10% 90%;
+}
+
+/* FIXED LAYOUT: Punti di fissità => 10% impostazioni, 90% esercizio */
+.view[data-view="fixation"] .exercise-layout.fixation-layout{
+  display:grid !important;
+  grid-template-columns: 10% 90% !important;
+}
+.view[data-view="fixation"] .exercise-layout.fixation-layout > .settings-panel{
+  grid-column: 1;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: hidden;
+}
+.view[data-view="fixation"] .exercise-layout.fixation-layout > .display-panel{
+  grid-column: 2;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+.stack-fields{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+@media (max-width: 980px){
+  .fixation-layout{grid-template-columns: 1fr}
+  .fixation-layout .settings-panel, .settings-panel.narrow{max-width:none}
+}
 
 .btn{
   padding:10px 12px;
@@ -369,3 +430,16 @@ select{cursor:pointer}
 
 .prose h3{margin-top: 0}
 .prose ol, .prose ul{margin-top: 8px}
+
+
+.fixation-head{
+  display:grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items:center;
+}
+.fixation-actions{justify-content:center}
+
+@media (max-width: 980px){
+  .fixation-head{grid-template-columns:1fr}
+  .fixation-actions{justify-content:flex-start}
+}
