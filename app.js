@@ -389,6 +389,21 @@ function wipeUser(userId){
   rerenderAll();
 }
 
+function deleteUser(userId){
+  const idx = STATE.users.findIndex(x=>x.id===userId);
+  if(idx === -1) return;
+  STATE.users.splice(idx, 1);
+  if(!STATE.users.length){
+    const fresh = defaultState();
+    STATE.users = fresh.users;
+    STATE.activeUserId = fresh.activeUserId;
+  } else if(STATE.activeUserId === userId){
+    STATE.activeUserId = STATE.users[0].id;
+  }
+  saveState();
+  rerenderAll();
+}
+
 function wipeAll(){
   STATE = defaultState();
   saveState();
@@ -1137,6 +1152,7 @@ const Fix = {
   session:null,
   currentMs:250,
   lapsCompleted:0,
+  minMsReached:250,
 };
 
 function fixBuildGrid(cols, rows, segs, mode){
@@ -1280,6 +1296,7 @@ function fixStart(){
   Fix.paused = false;
   Fix.startedPerf = performance.now();
   fixSetCurrentMs(ms);
+  Fix.minMsReached = Fix.currentMs;
 
   Fix.session = {
     id: uid(),
@@ -1319,6 +1336,7 @@ function fixStart(){
       Fix.lapsLeft -= 1;
       Fix.lapsCompleted += 1;
       fixSetCurrentMs(Fix.currentMs - 10);
+      Fix.minMsReached = Math.min(Fix.minMsReached, Fix.currentMs);
       if(Fix.lapsLeft <= 0){
         fixStop(true);
         return;
@@ -1364,6 +1382,7 @@ function fixStop(completed=false){
       accuracy: completed ? 1 : 0,
       durationSec: Math.round(Fix.elapsedMs/1000),
       score: completed ? "OK" : "STOP",
+      minMsReached: Math.round(Fix.minMsReached || Fix.currentMs || Number($("#fixMs").value)||250),
     };
     addSessionToUser(Fix.session);
     const u = getActiveUser();
@@ -1404,11 +1423,12 @@ function fixStop(completed=false){
       if(fixationItemRating(next) > fixationItemRating(prof.bestParams)) prof.bestParams = { ...next };
     }else{
       // user pressed Stop because comprehension dropped: offer a slower starting speed next time
+      const restartMs = clamp((Fix.minMsReached || curr.holdMs || 600) + 40, 300, 2200);
       prof.currentParams = {
         ...curr,
-        holdMs: clamp((curr.holdMs ?? 600) + 80, 300, 2200),
+        holdMs: restartMs,
       };
-      $("#fixStatus").textContent = "Interrotto: al prossimo avvio partirai un po' più lento.";
+      $("#fixStatus").textContent = `Interrotto: prossimo avvio da ${Math.round(restartMs)} ms.`;
     }
 
     u.settings.fixation.profile = prof;
@@ -1480,6 +1500,12 @@ function bindTopbar(){
   $("#btnAddUser").addEventListener("click", ()=>{
     const name = prompt("Nome nuovo utente:");
     if(name) addUser(name);
+  });
+  $("#btnDeleteUser").addEventListener("click", ()=>{
+    const u = getActiveUser();
+    if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
+      deleteUser(u.id);
+    }
   });
   $("#btnSettings").addEventListener("click", openSettings);
 }
