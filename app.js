@@ -1337,19 +1337,14 @@ function fixStart(){
     }
 
     fixActivate(Fix.index);
-    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri rimasti: ${Fix.lapsLeft} • ${Math.round(Fix.currentMs)}ms`;
+    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri completati: ${Fix.lapsCompleted} • ${Math.round(Fix.currentMs)}ms`;
 
     Fix.index += 1;
     if(Fix.index >= Fix.total){
       Fix.index = 0;
-      Fix.lapsLeft -= 1;
       Fix.lapsCompleted += 1;
-      fixSetCurrentMs(Fix.currentMs - 10);
+      fixSetCurrentMs(Fix.currentMs - 50);
       Fix.minMsReached = Math.min(Fix.minMsReached, Fix.currentMs);
-      if(Fix.lapsLeft <= 0){
-        fixStop(true);
-        return;
-      }
     }
 
     Fix.timerId = setTimeout(tick, Math.max(50, Math.round(Fix.currentMs)));

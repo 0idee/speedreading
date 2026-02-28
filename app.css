@@ -363,7 +363,7 @@ textarea{
   color: var(--text);
   text-align:center;
   min-height: 32px;
-  visibility:visible;
+  visibility:hidden;
 }
 .fix-cell.active .seg{font-weight:700; visibility:visible}
 
