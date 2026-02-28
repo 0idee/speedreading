@@ -34,7 +34,7 @@ function defaultUserSettings(){
   return {
     reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"", profile: defaultAdaptiveProfile({ exposureMs: 250, stimulusSize: 8, complexity: 1.0 }) },
     span: { ms: 800, font:110, profile: defaultSpanProfile() },
-    fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki", customText:"", profile: defaultAdaptiveProfile({ holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 }) },
+    fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, font: 12, lang:"it", source:"wiki", customText:"", profile: defaultAdaptiveProfile({ holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 }) },
   };
 }
 
@@ -136,6 +136,7 @@ function migrateState(st){
     u.settings.fixation = ensureObject(u.settings.fixation, JSON.parse(JSON.stringify(defaults.fixation)));
     if(typeof u.settings.reader.customText !== "string") u.settings.reader.customText = "";
     if(typeof u.settings.fixation.customText !== "string") u.settings.fixation.customText = "";
+    if(!Number.isFinite(Number(u.settings.fixation.font))) u.settings.fixation.font = 12;
     u.settings.reader.profile = normalizeAdaptiveProfile(u.settings.reader.profile, { exposureMs: 250, stimulusSize: 8, complexity: 1.0 });
     u.settings.fixation.profile = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
     if(!u.settings.span.profile){
@@ -1223,6 +1224,11 @@ function fixSetCurrentMs(ms){
   fixRenderSpeedBadge();
 }
 
+function fixApplyFont(){
+  const px = clamp(Number($("#fixFont").value)||12, 10, 30);
+  $("#fixGrid")?.style.setProperty("--fix-font-size", `${px}px`);
+}
+
 function fixActivate(i){
   const grid = $("#fixGrid");
   const prev = grid.querySelector(".fix-cell.active");
@@ -1256,6 +1262,8 @@ function fixPrepare(){
   const mode = $("#fixMode").value;
   const cols = Number($("#fixCols").value);
   let rows = Number($("#fixRows").value);
+
+  fixApplyFont();
 
   // ensure grid exists
   if(mode==="text"){
@@ -1309,6 +1317,7 @@ function fixStart(){
       rows: Number($("#fixRows").value),
       mode: $("#fixMode").value,
       segLen: Number($("#fixSegLen").value)||20,
+      font: Number($("#fixFont").value)||12,
       lang: $("#fixLang").value,
       source: $("#fixSource").value,
       title: (getTextCache($("#fixLang").value)||{}).title || null
@@ -1636,7 +1645,7 @@ function bindFix(){
   $("#btnFixPause").addEventListener("click", fixPauseToggle);
   $("#btnFixStop").addEventListener("click", ()=> fixStop(false));
 
-  ["fixMs","fixLaps","fixCols","fixRows","fixMode","fixSegLen","fixLang","fixSource","fixCustomText"].forEach(id=>{
+  ["fixMs","fixLaps","fixCols","fixRows","fixMode","fixSegLen","fixFont","fixLang","fixSource","fixCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
       const prevProfile = u.settings?.fixation?.profile;
@@ -1647,12 +1656,14 @@ function bindFix(){
         rows: Number($("#fixRows").value)||10,
         mode: $("#fixMode").value,
         segLen: Number($("#fixSegLen").value)||20,
+        font: Number($("#fixFont").value)||12,
         lang: $("#fixLang").value,
         source: $("#fixSource").value,
         customText: $("#fixCustomText").value || "",
         profile: normalizeAdaptiveProfile(prevProfile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 }),
       };
       fixSetCurrentMs(Number($("#fixMs").value)||250);
+      fixApplyFont();
       saveState();
     });
   });
@@ -1713,6 +1724,8 @@ function applyUserSettingsToForm(){
   $("#fixRows").value = String(fx.rows ?? fxl.rows);
   $("#fixMode").value = fx.mode ?? "dots";
   $("#fixSegLen").value = String(fx.segLen ?? 20);
+  $("#fixFont").value = String(fx.font ?? 12);
+  fixApplyFont();
   $("#fixLang").value = fx.lang ?? "it";
   $("#fixSource").value = fx.source ?? "wiki";
   $("#fixCustomText").value = fx.customText || "";
