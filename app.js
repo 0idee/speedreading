@@ -30,6 +30,11 @@ const STOPWORDS = {
   en: new Set(["the","a","an","of","to","in","on","for","and","or","that","with","as","at","by","from","is","are","was","were","be","been","this","these","those","it","its","not","more","than"])
 };
 
+const QUIZ_DISTRACTOR_BANK = {
+  it: ["memoria","attenzione","velocita","sintesi","progressione","allenamento","comprensione","metodo","lettura","focalizzazione","strategia","selezione","modello","misurazione","esercizio","concentrazione","sequenza","accuratezza"],
+  en: ["memory","attention","velocity","summary","progression","training","comprehension","method","reading","focus","strategy","selection","model","measurement","exercise","concentration","sequence","accuracy"],
+};
+
 function defaultUserSettings(){
   return {
     reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"", profile: defaultAdaptiveProfile({ exposureMs: 250, stimulusSize: 8, complexity: 1.0 }) },
@@ -56,6 +61,21 @@ function clamp(n,min,max){ return Math.max(min, Math.min(max, n)); }
 function uid(){
   if (crypto?.randomUUID) return crypto.randomUUID();
   return "id_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
+}
+
+function hashPassword(raw){
+  const s = String(raw || "");
+  let h = 2166136261;
+  for(let i=0;i<s.length;i++){
+    h ^= s.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return `pw_${(h >>> 0).toString(16)}`;
+}
+
+function verifyPassword(user, candidate){
+  if(!user?.auth?.passwordHash) return false;
+  return user.auth.passwordHash === hashPassword(candidate);
 }
 
 function safeParseJson(s){
@@ -105,6 +125,7 @@ function defaultState(){
         name: "Luca",
         createdAt: nowIso(),
         sessions: [],
+        auth: { passwordHash: hashPassword("1234") },
         settings: defaultUserSettings()
       }
     ],
@@ -130,6 +151,8 @@ function migrateState(st){
   const defaults = defaultUserSettings();
   for(const u of st.users){
     if(!u.sessions) u.sessions = [];
+    u.auth = ensureObject(u.auth, { passwordHash: "" });
+    if(typeof u.auth.passwordHash !== "string") u.auth.passwordHash = "";
     if(!u.settings || typeof u.settings !== "object") u.settings = JSON.parse(JSON.stringify(defaults));
     u.settings.reader = ensureObject(u.settings.reader, JSON.parse(JSON.stringify(defaults.reader)));
     u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
@@ -366,14 +389,16 @@ function setActiveUser(userId){
   rerenderAll();
 }
 
-function addUser(name){
+function addUser(name, password){
   const clean = (name || "").trim();
-  if(!clean) return;
+  const pass = String(password || "");
+  if(!clean || pass.length < 4) return;
   const u = {
     id: uid(),
     name: clean,
     createdAt: nowIso(),
     sessions: [],
+    auth: { passwordHash: hashPassword(pass) },
     settings: JSON.parse(JSON.stringify(defaultState().users[0].settings)),
   };
   STATE.users.push(u);
@@ -879,15 +904,30 @@ function readerPauseToggle(){
 }
 
 function buildQuizFromText(text, lang){
-  const w = wordsOf(text).map(x=>x.replace(/[^\p{L}\p{N}'-]/gu,"")).filter(Boolean);
-  const candidates = w.filter(x=>x.length>=4 && !(STOPWORDS[lang]?.has(x.toLowerCase())));
-  const unique = Array.from(new Set(candidates.map(x=>x.toLowerCase())));
+  const normalize = (x)=> x.toLowerCase().replace(/[^\p{L}\p{N}'-]/gu,"").trim();
+  const w = wordsOf(text).map(normalize).filter(Boolean);
+  const candidates = w.filter(x=>x.length>=4 && !(STOPWORDS[lang]?.has(x)));
+  const unique = Array.from(new Set(candidates));
   if(unique.length < 8) return [];
+  const sourceSet = new Set(unique);
+  const bank = (QUIZ_DISTRACTOR_BANK[lang] || QUIZ_DISTRACTOR_BANK.it)
+    .map(normalize)
+    .filter(x=>x.length>=4 && !sourceSet.has(x));
+  const usedCorrect = new Set();
   const qs = [];
   for(let i=0;i<3;i++){
-    const correct = pick(unique);
-    const distractPool = unique.filter(x=>x!==correct);
+    const correctPool = unique.filter(x=>!usedCorrect.has(x));
+    const correct = pick(correctPool.length ? correctPool : unique);
+    usedCorrect.add(correct);
+    const mutationPool = [
+      `${correct}x`,
+      `${correct}zione`,
+      `${correct.slice(0, Math.max(2, Math.floor(correct.length/2)))}max`,
+      `${correct}${correct.at(-1) || "a"}`,
+    ].map(normalize).filter(x=>x.length>=4 && x!==correct && !sourceSet.has(x));
+    const distractPool = Array.from(new Set([...bank, ...mutationPool])).filter(x=>x!==correct);
     const distract = shuffle(distractPool).slice(0,3);
+    if(distract.length < 3) continue;
     const opts = shuffle([correct, ...distract]);
     qs.push({ id: uid(), correct, opts, chosen: null });
   }
@@ -1337,14 +1377,19 @@ function fixStart(){
     }
 
     fixActivate(Fix.index);
-    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri completati: ${Fix.lapsCompleted} • ${Math.round(Fix.currentMs)}ms`;
+    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri rimasti: ${Fix.lapsLeft} • ${Math.round(Fix.currentMs)}ms`;
 
     Fix.index += 1;
     if(Fix.index >= Fix.total){
       Fix.index = 0;
+      Fix.lapsLeft -= 1;
       Fix.lapsCompleted += 1;
-      fixSetCurrentMs(Fix.currentMs - 50);
+      fixSetCurrentMs(Fix.currentMs - 10);
       Fix.minMsReached = Math.min(Fix.minMsReached, Fix.currentMs);
+      if(Fix.lapsLeft <= 0){
+        fixStop(true);
+        return;
+      }
     }
 
     Fix.timerId = setTimeout(tick, Math.max(50, Math.round(Fix.currentMs)));
@@ -1503,7 +1548,38 @@ function bindTopbar(){
   $("#userSelect").addEventListener("change", (e)=> setActiveUser(e.target.value));
   $("#btnAddUser").addEventListener("click", ()=>{
     const name = prompt("Nome nuovo utente:");
-    if(name) addUser(name);
+    if(!name) return;
+    const password = prompt("Imposta password per il nuovo account (minimo 4 caratteri):");
+    if(password == null) return;
+    if(String(password).length < 4){
+      alert("Password troppo corta. Minimo 4 caratteri.");
+      return;
+    }
+    addUser(name, password);
+  });
+  $("#btnDeleteUser").addEventListener("click", ()=>{
+    const u = getActiveUser();
+    if(!u?.auth?.passwordHash){
+      const setup = prompt(`L'account "${u.name}" non ha password. Impostane una ora (minimo 4 caratteri):`);
+      if(setup == null) return;
+      if(String(setup).length < 4){
+        alert("Password troppo corta. Minimo 4 caratteri.");
+        return;
+      }
+      u.auth = { passwordHash: hashPassword(setup) };
+      saveState();
+      alert("Password impostata. Ripeti l'azione Elimina account per confermare.");
+      return;
+    }
+    const pass = prompt(`Inserisci la password dell'account "${u.name}" per confermare l'eliminazione:`);
+    if(pass == null) return;
+    if(!verifyPassword(u, pass)){
+      alert("Password errata. Account non eliminato.");
+      return;
+    }
+    if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
+      deleteUser(u.id);
+    }
   });
   $("#btnDeleteUser").addEventListener("click", ()=>{
     const u = getActiveUser();
