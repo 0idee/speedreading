@@ -1,10 +1,12 @@
 import { defaultSpanProfile, normalizeSpanProfile, generateSpanStimulus, evaluateSpanAttempt, updateSpanProgress, pushSpanRollingResult } from "./visual-span.js";
 import { defaultAdaptiveProfile, normalizeAdaptiveProfile, updateGlickoLite, targetItemRating, selectCandidate, pushRollingResult, rollingAccuracy } from "./adaptive-glicko.js";
+import { validateReaderDb, buildReaderRenderModel, isExactCorrectAnswer } from "./reader-quiz.js";
 // SpeedRead Trainer V2 (no build tools, Brave-friendly)
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
 const APP_KEY = "speedread_trainer_v2_state";
 const APP_VERSION = 5;
+const READER_DB_URL = "./data/lettura_veloce_santi_it_v1.json";
 
 const EXERCISES = {
   reader: { id: "reader", name: "Lettura veloce" },
@@ -25,15 +27,22 @@ const OFFLINE_TEXTS = {
   ],
 };
 
+let READER_DB_CACHE = null;
+
+async function loadReaderDb(){
+  if(READER_DB_CACHE) return READER_DB_CACHE;
+  const res = await fetch(READER_DB_URL);
+  if(!res.ok) throw new Error("Database Lettura Veloce non disponibile");
+  const json = await res.json();
+  READER_DB_CACHE = validateReaderDb(json);
+  return READER_DB_CACHE;
+}
+
 const STOPWORDS = {
   it: new Set(["il","lo","la","i","gli","le","un","uno","una","di","a","da","in","su","per","tra","fra","e","o","che","del","della","dei","delle","al","allo","alla","ai","agli","alle","nel","nello","nella","nei","nelle","con","non","più","come","se"]),
   en: new Set(["the","a","an","of","to","in","on","for","and","or","that","with","as","at","by","from","is","are","was","were","be","been","this","these","those","it","its","not","more","than"])
 };
 
-const QUIZ_DISTRACTOR_BANK = {
-  it: ["memoria","attenzione","velocita","sintesi","progressione","allenamento","comprensione","metodo","lettura","focalizzazione","strategia","selezione","modello","misurazione","esercizio","concentrazione","sequenza","accuratezza"],
-  en: ["memory","attention","velocity","summary","progression","training","comprehension","method","reading","focus","strategy","selection","model","measurement","exercise","concentration","sequence","accuracy"],
-};
 
 function defaultUserSettings(){
   return {
@@ -353,6 +362,19 @@ async function getAdaptiveText(lang, minWords, source, customText=""){
     const wordCount = wordsOf(text).length;
     if(wordCount < 40) throw new Error("Incolla almeno 40 parole nel testo personalizzato.");
     return { title: "Testo personalizzato", text, sourceUrl: null, wordCount };
+  }
+  if(source === "santi-db") {
+    const db = await loadReaderDb();
+    const items = db.items.filter(it => typeof it?.text === "string" && wordsOf(it.text).length >= minWords);
+    const chosen = pick(items.length ? items : db.items);
+    const model = buildReaderRenderModel(chosen, 20);
+    return {
+      title: model.title,
+      text: model.text,
+      sourceUrl: null,
+      wordCount: wordsOf(model.text).length,
+      quizQuestions: model.questions
+    };
   }
   if(source === "offline"){
     const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
@@ -904,34 +926,11 @@ function readerPauseToggle(){
 }
 
 function buildQuizFromText(text, lang){
-  const normalize = (x)=> x.toLowerCase().replace(/[^\p{L}\p{N}'-]/gu,"").trim();
-  const w = wordsOf(text).map(normalize).filter(Boolean);
-  const candidates = w.filter(x=>x.length>=4 && !(STOPWORDS[lang]?.has(x)));
-  const unique = Array.from(new Set(candidates));
-  if(unique.length < 8) return [];
-  const sourceSet = new Set(unique);
-  const bank = (QUIZ_DISTRACTOR_BANK[lang] || QUIZ_DISTRACTOR_BANK.it)
-    .map(normalize)
-    .filter(x=>x.length>=4 && !sourceSet.has(x));
-  const usedCorrect = new Set();
-  const qs = [];
-  for(let i=0;i<3;i++){
-    const correctPool = unique.filter(x=>!usedCorrect.has(x));
-    const correct = pick(correctPool.length ? correctPool : unique);
-    usedCorrect.add(correct);
-    const mutationPool = [
-      `${correct}x`,
-      `${correct}zione`,
-      `${correct.slice(0, Math.max(2, Math.floor(correct.length/2)))}max`,
-      `${correct}${correct.at(-1) || "a"}`,
-    ].map(normalize).filter(x=>x.length>=4 && x!==correct && !sourceSet.has(x));
-    const distractPool = Array.from(new Set([...bank, ...mutationPool])).filter(x=>x!==correct);
-    const distract = shuffle(distractPool).slice(0,3);
-    if(distract.length < 3) continue;
-    const opts = shuffle([correct, ...distract]);
-    qs.push({ id: uid(), correct, opts, chosen: null });
+  const cached = getTextCache(lang);
+  if(Array.isArray(cached?.quizQuestions) && cached.quizQuestions.length){
+    return cached.quizQuestions.slice(0,20).map(q=> ({ ...q, chosen: null }));
   }
-  return qs;
+  return [];
 }
 
 function renderQuiz(quiz){
@@ -956,11 +955,12 @@ function renderQuiz(quiz){
       b.addEventListener("click", ()=>{
         if(q.chosen) return;
         q.chosen = opt;
-        b.classList.add(opt===q.correct ? "correct" : "wrong");
+        const isOk = isExactCorrectAnswer(q, opt);
+        b.classList.add(isOk ? "correct" : "wrong");
         // mark correct if chosen wrong
-        if(opt!==q.correct){
+        if(!isOk){
           Array.from(optsBox.children).forEach(ch=>{
-            if(ch.textContent===q.correct) ch.classList.add("correct");
+            if(isExactCorrectAnswer(q, ch.textContent)) ch.classList.add("correct");
           });
         }
       });
@@ -993,14 +993,14 @@ function readerStop(completed=false){
   const quiz = cached ? buildQuizFromText(cached.text, cachedLang) : [];
   renderQuiz(quiz);
 
-  const accuracy = quiz.length ? (quiz.filter(q=>q.chosen===q.correct).length / quiz.length) : null;
+  const accuracy = quiz.length ? (quiz.filter(q=>isExactCorrectAnswer(q, q.chosen)).length / quiz.length) : null;
 
   if(Reader.session){
     Reader.session.endedAt = nowIso();
     Reader.session.metrics = {
       wpm: Number.isFinite(wpm) ? wpm : null,
       accuracy: Number.isFinite(accuracy) ? accuracy : null,
-      score: quiz.length ? `${quiz.filter(q=>q.chosen===q.correct).length}/${quiz.length}` : null,
+      score: quiz.length ? `${quiz.filter(q=>isExactCorrectAnswer(q, q.chosen)).length}/${quiz.length}` : null,
       durationSec: Math.round(Reader.elapsedMs/1000),
       wordCount: words,
     };
@@ -1577,12 +1577,6 @@ function bindTopbar(){
       alert("Password errata. Account non eliminato.");
       return;
     }
-    if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
-      deleteUser(u.id);
-    }
-  });
-  $("#btnDeleteUser").addEventListener("click", ()=>{
-    const u = getActiveUser();
     if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
       deleteUser(u.id);
     }
