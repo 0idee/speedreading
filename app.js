@@ -1,8 +1,13 @@
+import { defaultSpanProfile, normalizeSpanProfile, generateSpanStimulus, evaluateSpanAttempt, updateSpanProgress, pushSpanRollingResult } from "./visual-span.js";
+import { defaultAdaptiveProfile, normalizeAdaptiveProfile, updateGlickoLite, targetItemRating, selectCandidate, pushRollingResult, rollingAccuracy } from "./adaptive-glicko.js";
+import { validateReaderDb, buildReaderRenderModel, isExactCorrectAnswer } from "./reader-quiz.js";
+import { createPasswordAuth, verifyPasswordAuth } from "./account-auth.js";
 // SpeedRead Trainer V2 (no build tools, Brave-friendly)
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
 const APP_KEY = "speedread_trainer_v2_state";
-const APP_VERSION = 2;
+const APP_VERSION = 5;
+const READER_DB_URL = "./data/lettura_veloce_santi_it_v1.json";
 
 const EXERCISES = {
   reader: { id: "reader", name: "Lettura veloce" },
@@ -23,10 +28,30 @@ const OFFLINE_TEXTS = {
   ],
 };
 
+let READER_DB_CACHE = null;
+
+async function loadReaderDb(){
+  if(READER_DB_CACHE) return READER_DB_CACHE;
+  const res = await fetch(READER_DB_URL);
+  if(!res.ok) throw new Error("Database Lettura Veloce non disponibile");
+  const json = await res.json();
+  READER_DB_CACHE = validateReaderDb(json);
+  return READER_DB_CACHE;
+}
+
 const STOPWORDS = {
   it: new Set(["il","lo","la","i","gli","le","un","uno","una","di","a","da","in","su","per","tra","fra","e","o","che","del","della","dei","delle","al","allo","alla","ai","agli","alle","nel","nello","nella","nei","nelle","con","non","più","come","se"]),
   en: new Set(["the","a","an","of","to","in","on","for","and","or","that","with","as","at","by","from","is","are","was","were","be","been","this","these","those","it","its","not","more","than"])
 };
+
+
+function defaultUserSettings(){
+  return {
+    reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"", profile: defaultAdaptiveProfile({ exposureMs: 250, stimulusSize: 8, complexity: 1.0 }) },
+    span: { ms: 800, font:110, profile: defaultSpanProfile() },
+    fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, font: 12, lang:"it", source:"wiki", customText:"", profile: defaultAdaptiveProfile({ holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 }) },
+  };
+}
 
 // ---------- utilities ----------
 const $ = (sel) => document.querySelector(sel);
@@ -50,6 +75,10 @@ function uid(){
 
 function safeParseJson(s){
   try { return JSON.parse(s); } catch { return null; }
+}
+
+function ensureObject(value, fallback){
+  return (value && typeof value === "object" && !Array.isArray(value)) ? value : fallback;
 }
 
 function wordsOf(text){
@@ -91,11 +120,8 @@ function defaultState(){
         name: "Luca",
         createdAt: nowIso(),
         sessions: [],
-        settings: {
-          reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki" },
-          span: { ms: 250, len: 4, az:true, AZ:true, n09:true, us:true, font:110 },
-          fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, lang:"it", source:"wiki" },
-        }
+        auth: createPasswordAuth("1234"),
+        settings: defaultUserSettings()
       }
     ],
     textCache: { it: null, en: null },
@@ -117,9 +143,26 @@ function migrateState(st){
   if(!st.textCache) st.textCache = { it:null, en:null };
   if(!st.ui) st.ui = { pacerFont: 18, debug: false };
 
+  const defaults = defaultUserSettings();
   for(const u of st.users){
     if(!u.sessions) u.sessions = [];
-    if(!u.settings) u.settings = defaultState().users[0].settings;
+    u.auth = ensureObject(u.auth, { passwordHash: "", salt: "" });
+    if(typeof u.auth.passwordHash !== "string") u.auth.passwordHash = "";
+    if(typeof u.auth.salt !== "string") u.auth.salt = "";
+    if(!u.settings || typeof u.settings !== "object") u.settings = JSON.parse(JSON.stringify(defaults));
+    u.settings.reader = ensureObject(u.settings.reader, JSON.parse(JSON.stringify(defaults.reader)));
+    u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
+    u.settings.fixation = ensureObject(u.settings.fixation, JSON.parse(JSON.stringify(defaults.fixation)));
+    if(typeof u.settings.reader.customText !== "string") u.settings.reader.customText = "";
+    if(typeof u.settings.fixation.customText !== "string") u.settings.fixation.customText = "";
+    if(!Number.isFinite(Number(u.settings.fixation.font))) u.settings.fixation.font = 12;
+    u.settings.reader.profile = normalizeAdaptiveProfile(u.settings.reader.profile, { exposureMs: 250, stimulusSize: 8, complexity: 1.0 });
+    u.settings.fixation.profile = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
+    if(!u.settings.span.profile){
+      u.settings.span.profile = defaultSpanProfile();
+      if(Number.isFinite(u.settings.span.len)) u.settings.span.profile.currentLength = clamp(Number(u.settings.span.len), 4, 14);
+    }
+    u.settings.span.profile = normalizeSpanProfile(u.settings.span.profile);
 
     // Fix the bug that caused: (a.startedAt||"").localeCompare is not a function
     // Ensure startedAt/endedAt are ISO strings (or null), not numbers/objects.
@@ -278,22 +321,58 @@ async function syncPull(){
 // ---------- wikipedia fetch ----------
 async function fetchWikipediaExtract(lang, minWords){
   const host = lang === "en" ? "en.wikipedia.org" : "it.wikipedia.org";
-  const url = `https://${host}/w/api.php?origin=*&format=json&action=query&generator=random&grnnamespace=0&prop=extracts&explaintext=1&exsectionformat=plain&exintro=0&exchars=12000`;
+  const url = `https://${host}/w/api.php?origin=*&format=json&action=query&generator=random&grnnamespace=0&grnlimit=8&prop=extracts&explaintext=1&exsectionformat=plain&exchars=12000`;
   const r = await fetch(url, { cache: "no-store" });
   if(!r.ok) throw new Error("Wikipedia fetch failed");
   const j = await r.json();
-  const pages = j?.query?.pages;
-  if(!pages) throw new Error("Wikipedia empty");
-  const first = Object.values(pages)[0];
-  const title = first?.title || "Wikipedia";
-  const textRaw = (first?.extract || "").replace(/\n{2,}/g, "\n").trim();
-  const w = wordsOf(textRaw);
-  if(w.length < minWords) throw new Error("Too short");
-  const pageUrl = `https://${host}/wiki/${encodeURIComponent(title.replace(/ /g,"_"))}`;
-  return { title, text: textRaw, sourceUrl: pageUrl, wordCount: w.length };
+
+  const pages = Object.values(j?.query?.pages || {});
+  if(!pages.length) throw new Error("Wikipedia empty");
+
+  const candidates = pages
+    .map(p=>{
+      const title = p?.title || "Wikipedia";
+      const textRaw = (p?.extract || "").replace(/\n{2,}/g, "\n").trim();
+      const w = wordsOf(textRaw);
+      const sourceUrl = `https://${host}/wiki/${encodeURIComponent(title.replace(/ /g,"_"))}`;
+      return { title, text: textRaw, sourceUrl, wordCount: w.length };
+    })
+    .filter(x=>x.wordCount >= minWords);
+
+  if(!candidates.length) throw new Error("Too short");
+  return pick(candidates);
 }
 
-async function getAdaptiveText(lang, minWords, source){
+async function getAdaptiveText(lang, minWords, source, customText=""){
+  if(source === "custom") {
+    const text = (customText || "").trim();
+    const wordCount = wordsOf(text).length;
+    if(wordCount < 40) throw new Error("Incolla almeno 40 parole nel testo personalizzato.");
+    return { title: "Testo personalizzato", text, sourceUrl: null, wordCount };
+  }
+  if(source === "santi-db") {
+    try{
+      const db = await loadReaderDb();
+      const items = db.items.filter(it => typeof it?.text === "string" && wordsOf(it.text).length >= minWords);
+      const chosen = pick(items.length ? items : db.items);
+      const model = buildReaderRenderModel(chosen, 4);
+      if(model.questions.length < 4){
+        console.warn("Dataset con meno di 4 domande: fallback controllato attivo");
+      }
+      return {
+        title: model.title,
+        text: model.text,
+        sourceUrl: null,
+        wordCount: wordsOf(model.text).length,
+        quizQuestions: model.questions
+      };
+    }catch(err){
+      console.warn("Errore validazione dataset Lettura Veloce, fallback offline:", err);
+      const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
+      const text = t.join("\n\n");
+      return { title: "Offline (dataset fallback)", text, sourceUrl: null, wordCount: wordsOf(text).length, quizQuestions: [] };
+    }
+  }
   if(source === "offline"){
     const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
     const text = t.join("\n\n");
@@ -320,23 +399,37 @@ async function getAdaptiveText(lang, minWords, source){
 
 // ---------- UI state helpers ----------
 function getActiveUser(){
-  return STATE.users.find(u=>u.id===STATE.activeUserId) || STATE.users[0];
+  if(!STATE.users.length) return null;
+  return STATE.users.find(u=>u.id===STATE.activeUserId) || STATE.users[0] || null;
 }
 
 function setActiveUser(userId){
+  const target = STATE.users.find(u=>u.id===userId);
+  if(!target) return;
+  if(target?.auth?.passwordHash){
+    const pass = prompt(`Password per accedere a "${target.name}":`);
+    if(pass == null) return;
+    if(!verifyPasswordAuth(target.auth, pass)){
+      alert("Password errata.");
+      renderUserSelect();
+      return;
+    }
+  }
   STATE.activeUserId = userId;
   saveState();
   rerenderAll();
 }
 
-function addUser(name){
+function addUser(name, password){
   const clean = (name || "").trim();
-  if(!clean) return;
+  const pass = String(password || "");
+  if(!clean || pass.length < 4) return;
   const u = {
     id: uid(),
     name: clean,
     createdAt: nowIso(),
     sessions: [],
+    auth: createPasswordAuth(pass),
     settings: JSON.parse(JSON.stringify(defaultState().users[0].settings)),
   };
   STATE.users.push(u);
@@ -349,6 +442,19 @@ function wipeUser(userId){
   const u = STATE.users.find(x=>x.id===userId);
   if(!u) return;
   u.sessions = [];
+  saveState();
+  rerenderAll();
+}
+
+function deleteUser(userId){
+  const idx = STATE.users.findIndex(x=>x.id===userId);
+  if(idx === -1) return;
+  STATE.users.splice(idx, 1);
+  if(!STATE.users.length){
+    STATE.activeUserId = null;
+  } else if(STATE.activeUserId === userId){
+    STATE.activeUserId = STATE.users[0].id;
+  }
   saveState();
   rerenderAll();
 }
@@ -374,13 +480,79 @@ function sessionsByExercise(user, exId){
 
 function computeReaderLevel(user){
   const ss = sessionsByExercise(user, "reader");
-  const wpm = ss.map(s=>s.metrics?.wpm).filter(Number.isFinite);
+  const recent = ss.slice(-8);
+  const wpm = recent.map(s=>s.metrics?.wpm).filter(Number.isFinite);
+  const acc = recent.map(s=>s.metrics?.accuracy).filter(Number.isFinite);
   const m = median(wpm);
   if(!m) return { level: 1, baseWpm: 300, minWords: 180 };
-  const level = clamp(Math.floor(m / 150) + 1, 1, 10);
-  const baseWpm = clamp(Math.round(m/10)*10, 180, 1200);
-  const minWords = clamp(120 + level*90, 120, 1400);
+  const accFactor = acc.length ? clamp((median(acc)-0.65)/0.3, 0, 1) : 0.5;
+  const perf = m * (0.75 + accFactor*0.5);
+  const level = clamp(Math.floor(perf / 170) + 1, 1, 10);
+  const baseWpm = clamp(Math.round((m + level*18)/10)*10, 180, 1200);
+  const minWords = clamp(140 + level*95, 140, 1500);
   return { level, baseWpm, minWords };
+}
+
+function computeSpanLevel(user){
+  const profile = normalizeSpanProfile(user.settings?.span?.profile || {});
+  return {
+    level: profile.currentStage,
+    ms: user.settings?.span?.ms ?? 800,
+    len: profile.currentLength,
+  };
+}
+
+function computeFixLevel(user){
+  const ss = sessionsByExercise(user, "fixation").slice(-8);
+  const completed = ss.filter(s=>s.metrics?.accuracy===1).length;
+  const duration = ss.map(s=>s.metrics?.durationSec).filter(Number.isFinite);
+  if(!ss.length) return { level: 1, ms: 260, laps: 2, rows: 10 };
+  const completionRate = completed/ss.length;
+  const speed = duration.length ? clamp(1 - (median(duration)/240), 0, 1) : 0.4;
+  const level = clamp(Math.round(1 + completionRate*5 + speed*4), 1, 10);
+  return {
+    level,
+    ms: clamp(Math.round(320 - level*20), 90, 3000),
+    laps: clamp(1 + Math.floor(level/3), 1, 8),
+    rows: clamp(8 + Math.floor(level/2), 8, 16),
+  };
+}
+
+
+function readerItemRating(params){
+  const size0 = 8;
+  const ms0 = 250;
+  const a = 40;
+  const b = 300;
+  const c = 1.2;
+  return 1000 + a * ((params.stimulusSize ?? size0) - size0) + b * ((params.complexity ?? 1.0) - 1.0) + c * (ms0 - (params.exposureMs ?? ms0));
+}
+
+function fixationItemRating(params){
+  const hold0 = 600, size0 = 24, d0 = 2, amp0 = 1.0;
+  const a=35,b=25,c=40,d=80,e=120;
+  return 1000
+    + a * (((params.holdMs ?? hold0) - hold0)/100)
+    + b * ((size0 - (params.targetSizePx ?? size0))/5)
+    + c * ((params.distractorCount ?? d0) - d0)
+    + d * ((params.amplitude ?? amp0) - amp0)
+    + e * (params.motionFlag ? 1 : 0);
+}
+
+function applyReaderAdaptiveParams(user){
+  const p = normalizeAdaptiveProfile(user.settings.reader.profile, { exposureMs:250, stimulusSize:8, complexity:1.0 });
+  user.settings.reader.profile = p;
+  const wpm = clamp(Math.round(60000 / clamp(p.currentParams.exposureMs ?? 250, 80, 600)), 100, 1200);
+  user.settings.reader.wpm = wpm;
+  user.settings.reader.chunk = clamp(Math.round(p.currentParams.stimulusSize ?? 8), 1, 20);
+}
+
+function applyFixAdaptiveParams(user){
+  const p = normalizeAdaptiveProfile(user.settings.fixation.profile, { holdMs:600, targetSizePx:24, distractorCount:2, amplitude:1.0, motionFlag:0 });
+  user.settings.fixation.profile = p;
+  user.settings.fixation.ms = clamp(Math.round(p.currentParams.holdMs ?? 600), 50, 3000);
+  user.settings.fixation.cols = clamp(Math.round((p.currentParams.distractorCount ?? 2) + 1), 1, 8);
+  user.settings.fixation.rows = clamp(Math.round(8 + (p.currentParams.amplitude ?? 1.0) * 4), 6, 16);
 }
 
 function fmtSessionLabel(s){
@@ -485,6 +657,11 @@ function renderTextMeta(){
 function renderUserSelect(){
   const sel = $("#userSelect");
   sel.innerHTML = "";
+  if(!STATE.users.length){
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
   for(const u of STATE.users){
     const opt = document.createElement("option");
     opt.value = u.id;
@@ -496,9 +673,11 @@ function renderUserSelect(){
 
 function renderGoal(){
   const u = getActiveUser();
-  const lvl = computeReaderLevel(u);
-  $("#goalLine").textContent = `Target testo: ≥ ${lvl.minWords} parole • Target WPM: ${lvl.baseWpm}`;
-  $("#levelLine").textContent = `Livello stimato: ${lvl.level}/10 (basato sulle sessioni di lettura)`;
+  const rd = computeReaderLevel(u);
+  const sp = computeSpanLevel(u);
+  const fx = computeFixLevel(u);
+  $("#goalLine").textContent = `Reader L${rd.level}/10 • Span L${sp.level}/10 • Fix L${fx.level}/10`;
+  $("#levelLine").textContent = `Target: ${rd.baseWpm} WPM, span ${sp.len} char/${sp.ms}ms, fix ${fx.ms}ms • giri ${fx.laps}`;
 }
 
 function renderRecent(){
@@ -640,7 +819,7 @@ async function readerLoadText(){
   const source = $("#readerSource").value;
 
   $("#readerStatus").textContent = "Carico testo…";
-  const info = await getAdaptiveText(lang, minWords, source);
+  const info = await getAdaptiveText(lang, minWords, source, $("#readerCustomText")?.value || "");
   setTextCache(lang, info);
   $("#readerStatus").textContent = `Testo pronto: ${info.wordCount} parole`;
   return info;
@@ -759,19 +938,11 @@ function readerPauseToggle(){
 }
 
 function buildQuizFromText(text, lang){
-  const w = wordsOf(text).map(x=>x.replace(/[^\p{L}\p{N}'-]/gu,"")).filter(Boolean);
-  const candidates = w.filter(x=>x.length>=4 && !(STOPWORDS[lang]?.has(x.toLowerCase())));
-  const unique = Array.from(new Set(candidates.map(x=>x.toLowerCase())));
-  if(unique.length < 8) return [];
-  const qs = [];
-  for(let i=0;i<3;i++){
-    const correct = pick(unique);
-    const distractPool = unique.filter(x=>x!==correct);
-    const distract = shuffle(distractPool).slice(0,3);
-    const opts = shuffle([correct, ...distract]);
-    qs.push({ id: uid(), correct, opts, chosen: null });
+  const cached = getTextCache(lang);
+  if(Array.isArray(cached?.quizQuestions) && cached.quizQuestions.length){
+    return cached.quizQuestions.slice(0,4).map(q=> ({ ...q, chosen: null }));
   }
-  return qs;
+  return [];
 }
 
 function renderQuiz(quiz){
@@ -785,7 +956,7 @@ function renderQuiz(quiz){
     const div = document.createElement("div");
     div.className = "q";
     div.innerHTML = `
-      <div class="q-title">Domanda ${idx+1}: quale parola era nel testo?</div>
+      <div class="q-title">Domanda ${idx+1}: ${q.prompt}</div>
       <div class="opts"></div>
     `;
     const optsBox = div.querySelector(".opts");
@@ -796,11 +967,12 @@ function renderQuiz(quiz){
       b.addEventListener("click", ()=>{
         if(q.chosen) return;
         q.chosen = opt;
-        b.classList.add(opt===q.correct ? "correct" : "wrong");
+        const isOk = isExactCorrectAnswer(q, opt);
+        b.classList.add(isOk ? "correct" : "wrong");
         // mark correct if chosen wrong
-        if(opt!==q.correct){
+        if(!isOk){
           Array.from(optsBox.children).forEach(ch=>{
-            if(ch.textContent===q.correct) ch.classList.add("correct");
+            if(isExactCorrectAnswer(q, ch.textContent)) ch.classList.add("correct");
           });
         }
       });
@@ -833,18 +1005,53 @@ function readerStop(completed=false){
   const quiz = cached ? buildQuizFromText(cached.text, cachedLang) : [];
   renderQuiz(quiz);
 
-  const accuracy = quiz.length ? (quiz.filter(q=>q.chosen===q.correct).length / quiz.length) : null;
+  const accuracy = quiz.length ? (quiz.filter(q=>isExactCorrectAnswer(q, q.chosen)).length / quiz.length) : null;
 
   if(Reader.session){
     Reader.session.endedAt = nowIso();
     Reader.session.metrics = {
       wpm: Number.isFinite(wpm) ? wpm : null,
       accuracy: Number.isFinite(accuracy) ? accuracy : null,
-      score: quiz.length ? `${quiz.filter(q=>q.chosen===q.correct).length}/${quiz.length}` : null,
+      score: quiz.length ? `${quiz.filter(q=>isExactCorrectAnswer(q, q.chosen)).length}/${quiz.length}` : null,
       durationSec: Math.round(Reader.elapsedMs/1000),
       wordCount: words,
     };
     addSessionToUser(Reader.session);
+    if(completed){
+      const u = getActiveUser();
+    if(!u) return;
+      let prof = normalizeAdaptiveProfile(u.settings.reader.profile, { exposureMs: 250, stimulusSize: 8, complexity: 1.0 });
+      const S = Number.isFinite(accuracy) ? clamp(accuracy, 0, 1) : 0;
+      const curr = prof.currentParams;
+      const currItem = readerItemRating(curr);
+      const upd = updateGlickoLite({ R_user: prof.R_user, RD_user: prof.RD_user, R_item: currItem, S });
+      prof.R_user = upd.R_user;
+      prof.RD_user = upd.RD_user;
+      prof.attempts_count += 1;
+      prof.lastSessionAt = nowIso();
+      prof = pushRollingResult(prof, S, { at: nowIso(), params: curr });
+      const ra = rollingAccuracy(prof.rollingResults);
+      if(ra !== null){
+        if(ra < 0.45) prof.fatigueBias = -5;
+        else if(ra > 0.90) prof.fatigueBias = 5;
+        else prof.fatigueBias = 0;
+      }
+      const target = targetItemRating(prof.R_user, prof.RD_user) + prof.fatigueBias * 10;
+      const cands = [];
+      for(const dMs of [-25,0,25]) for(const dSz of [-1,0,1]) for(const dCx of [-0.05,0,0.05]){
+        cands.push({
+          exposureMs: clamp((curr.exposureMs ?? 250) + dMs, 80, 600),
+          stimulusSize: clamp((curr.stimulusSize ?? 8) + dSz, 4, 20),
+          complexity: clamp((curr.complexity ?? 1.0) + dCx, 1.0, 1.5),
+        });
+      }
+      const next = selectCandidate({ currentParams: curr, candidates: cands, itemRating: readerItemRating, targetRating: target }) || curr;
+      prof.currentParams = next;
+      if(readerItemRating(next) > readerItemRating(prof.bestParams)) prof.bestParams = { ...next };
+      u.settings.reader.profile = prof;
+      applyReaderAdaptiveParams(u);
+      saveState();
+    }
   }
 
   rerenderDashboard();
@@ -861,26 +1068,28 @@ const Span = {
   hideTimer: null,
 };
 
-function spanChars(){
-  const az = $("#spanAz").checked;
-  const AZ = $("#spanAZ").checked;
-  const n09 = $("#span09").checked;
-  const us = $("#spanUS").checked;
-  let pool = [];
-  if(us) pool.push("_");
-  if(n09) pool = pool.concat("0123456789".split(""));
-  if(AZ) pool = pool.concat("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""));
-  if(az) pool = pool.concat("abcdefghijklmnopqrstuvwxyz".split(""));
-  if(!pool.length) pool = pool.concat("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""));
-  return pool;
+function getSpanProfile(){
+  const u = getActiveUser();
+  const defaults = defaultUserSettings();
+  u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaults)));
+  u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
+  u.settings.span.profile = normalizeSpanProfile(u.settings.span.profile || {});
+  return u.settings.span.profile;
+}
+
+function setSpanProfile(profile){
+  const u = getActiveUser();
+  u.settings.span.profile = normalizeSpanProfile(profile);
+}
+
+function renderSpanStatus(){
+  const p = getSpanProfile();
+  $("#spanStatus").textContent = `Livello: Stage ${p.currentStage} · ${p.currentLength} caratteri`;
 }
 
 function spanGenerate(){
-  const len = clamp(Number($("#spanLen").value)||4, 1, 12);
-  const pool = spanChars();
-  let s = "";
-  for(let i=0;i<len;i++) s += pool[Math.floor(Math.random()*pool.length)];
-  return s;
+  const p = getSpanProfile();
+  return generateSpanStimulus({ stage: p.currentStage, length: p.currentLength });
 }
 
 function spanApplyFont(){
@@ -890,19 +1099,17 @@ function spanApplyFont(){
 
 function spanStartSessionIfNeeded(){
   if(Span.session) return;
+  const profile = getSpanProfile();
   Span.session = {
     id: uid(),
     exerciseId: "span",
     startedAt: nowIso(),
     endedAt: null,
     config: {
-      ms: Number($("#spanMs").value)||250,
-      len: Number($("#spanLen").value)||4,
-      az: $("#spanAz").checked,
-      AZ: $("#spanAZ").checked,
-      n09: $("#span09").checked,
-      us: $("#spanUS").checked,
-      font: Number($("#spanFont").value)||110
+      ms: Number($("#spanMs").value)||800,
+      font: Number($("#spanFont").value)||110,
+      startStage: profile.currentStage,
+      startLength: profile.currentLength,
     },
     metrics: {},
     notes: {},
@@ -910,16 +1117,18 @@ function spanStartSessionIfNeeded(){
   Span.tries = 0;
   Span.correct = 0;
   $("#spanScore").textContent = "Score: 0/0";
+  renderSpanStatus();
 }
 
 function spanNewTrial(){
   spanStartSessionIfNeeded();
+  if(Span.hideTimer) clearTimeout(Span.hideTimer);
   spanApplyFont();
   $("#spanResult").textContent = "";
   $("#spanInput").value = "";
   $("#spanInput").focus();
 
-  const ms = clamp(Number($("#spanMs").value)||250, 40, 3000);
+  const ms = clamp(Number($("#spanMs").value)||800, 40, 3000);
   const stim = spanGenerate();
   Span.current = stim;
   Span.shownAt = performance.now();
@@ -936,13 +1145,22 @@ function spanNewTrial(){
 function spanCheck(){
   if(!Span.session || !Span.current) return;
   const typed = ($("#spanInput").value||"").trim();
+  const ok = evaluateSpanAttempt(Span.current, typed);
   Span.tries += 1;
-  const ok = (typed === Span.current);
   if(ok) Span.correct += 1;
+
+  let profile = getSpanProfile();
+  profile = updateSpanProgress(profile, ok, { successStreakToGrow: 3 });
+  profile = pushSpanRollingResult(profile, { ok, at: nowIso() });
+  profile.lastSessionAt = nowIso();
+  setSpanProfile(profile);
+
   $("#spanResult").innerHTML = ok
     ? `<span style="color: var(--good); font-weight: 800;">buono:</span> ${Span.current}`
     : `<span style="color: var(--bad); font-weight: 800;">era:</span> ${Span.current}`;
   $("#spanScore").textContent = `Score: ${Span.correct}/${Span.tries}`;
+  renderSpanStatus();
+  saveState();
   Span.current = null;
 }
 
@@ -950,16 +1168,24 @@ function spanEndSession(){
   if(!Span.session) return;
   Span.session.endedAt = nowIso();
   const acc = Span.tries ? (Span.correct/Span.tries) : null;
+  const profile = getSpanProfile();
   Span.session.metrics = {
     accuracy: Number.isFinite(acc) ? acc : null,
     score: `${Span.correct}/${Span.tries}`,
     tries: Span.tries,
+    stage: profile.currentStage,
+    length: profile.currentLength,
+  };
+  Span.session.notes = {
+    restartPoint: `Stage ${profile.currentStage} · ${profile.currentLength} caratteri`,
+    best: `Stage ${profile.bestStageReached} · ${profile.bestLengthReached} caratteri`,
   };
   addSessionToUser(Span.session);
+
+  $("#spanResult").textContent = `Record: Stage ${profile.bestStageReached} · ${profile.bestLengthReached}. Ripartenza: Stage ${profile.currentStage} · ${profile.currentLength}.`;
   Span.session = null;
   Span.tries = 0;
   Span.correct = 0;
-  $("#spanResult").textContent = "";
   $("#spanStimulus").style.visibility = "visible";
   $("#spanStimulus").textContent = "—";
   $("#spanScore").textContent = "Score: 0/0";
@@ -978,6 +1204,9 @@ const Fix = {
   total:0,
   segs:[],
   session:null,
+  currentMs:250,
+  lapsCompleted:0,
+  minMsReached:250,
 };
 
 function fixBuildGrid(cols, rows, segs, mode){
@@ -1029,6 +1258,30 @@ function fixUpdateTimer(){
   $("#fixTimer").textContent = fmtTime(elapsed);
 }
 
+function fixComputeWpm(ms){
+  const segLen = clamp(Number($("#fixSegLen").value)||20, 10, 80);
+  const wordsPerStimulus = Math.max(1, segLen/6);
+  const wpm = (60000 / Math.max(50, ms)) * wordsPerStimulus;
+  return Math.round(wpm);
+}
+
+function fixRenderSpeedBadge(){
+  const ms = Math.max(50, Math.round(Fix.currentMs || Number($("#fixMs").value) || 250));
+  const wpm = fixComputeWpm(ms);
+  const el = $("#fixWpm");
+  if(el) el.textContent = `${wpm} WPM`;
+}
+
+function fixSetCurrentMs(ms){
+  Fix.currentMs = clamp(Math.round(ms), 50, 3000);
+  fixRenderSpeedBadge();
+}
+
+function fixApplyFont(){
+  const px = clamp(Number($("#fixFont").value)||12, 10, 30);
+  $("#fixGrid")?.style.setProperty("--fix-font-size", `${px}px`);
+}
+
 function fixActivate(i){
   const grid = $("#fixGrid");
   const prev = grid.querySelector(".fix-cell.active");
@@ -1047,17 +1300,23 @@ async function fixLoadText(){
   const minWords = Math.max(120, Math.round(total * (segLen/6))); // rough
 
   $("#fixStatus").textContent = "Carico testo…";
-  const info = await getAdaptiveText(lang, minWords, source);
+  const info = await getAdaptiveText(lang, minWords, source, $("#fixCustomText")?.value || "");
   setTextCache(lang, info);
   const segs = splitIntoSegments(info.text, segLen);
   Fix.segs = segs;
-  $("#fixStatus").textContent = `Testo pronto: ${info.wordCount} parole`;
+  const neededRows = Math.max(4, Math.ceil(segs.length / Math.max(1, cols)));
+  if(neededRows > rows){
+    $("#fixRows").value = String(neededRows);
+  }
+  $("#fixStatus").textContent = `Testo pronto: ${info.wordCount} parole • righe consigliate: ${neededRows}`;
 }
 
 function fixPrepare(){
   const mode = $("#fixMode").value;
   const cols = Number($("#fixCols").value);
-  const rows = Number($("#fixRows").value);
+  let rows = Number($("#fixRows").value);
+
+  fixApplyFont();
 
   // ensure grid exists
   if(mode==="text"){
@@ -1069,6 +1328,11 @@ function fixPrepare(){
     }
     const segLen = Number($("#fixSegLen").value)||20;
     Fix.segs = splitIntoSegments(cached.text, segLen);
+    const neededRows = Math.max(4, Math.ceil(Fix.segs.length / Math.max(1, cols)));
+    if(neededRows > rows){
+      rows = neededRows;
+      $("#fixRows").value = String(rows);
+    }
     fixBuildGrid(cols, rows, Fix.segs, "text");
   }else{
     fixBuildGrid(cols, rows, [], "dots");
@@ -1088,9 +1352,12 @@ function fixStart(){
   const ms = clamp(Number($("#fixMs").value)||250, 50, 3000);
   const laps = clamp(Number($("#fixLaps").value)||2, 1, 50);
   Fix.lapsLeft = laps;
+  Fix.lapsCompleted = 0;
   Fix.running = true;
   Fix.paused = false;
   Fix.startedPerf = performance.now();
+  fixSetCurrentMs(ms);
+  Fix.minMsReached = Fix.currentMs;
 
   Fix.session = {
     id: uid(),
@@ -1103,6 +1370,7 @@ function fixStart(){
       rows: Number($("#fixRows").value),
       mode: $("#fixMode").value,
       segLen: Number($("#fixSegLen").value)||20,
+      font: Number($("#fixFont").value)||12,
       lang: $("#fixLang").value,
       source: $("#fixSource").value,
       title: (getTextCache($("#fixLang").value)||{}).title || null
@@ -1113,23 +1381,34 @@ function fixStart(){
 
   $("#fixStatus").textContent = "In corso…";
 
-  Fix.timerId = setInterval(()=>{
+  const tick = ()=>{
     if(!Fix.running) return;
     fixUpdateTimer();
-    if(Fix.paused) return;
+    if(Fix.paused){
+      Fix.timerId = setTimeout(tick, 80);
+      return;
+    }
 
     fixActivate(Fix.index);
-    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri rimasti: ${Fix.lapsLeft}`;
+    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri rimasti: ${Fix.lapsLeft} • ${Math.round(Fix.currentMs)}ms`;
 
     Fix.index += 1;
     if(Fix.index >= Fix.total){
       Fix.index = 0;
       Fix.lapsLeft -= 1;
+      Fix.lapsCompleted += 1;
+      fixSetCurrentMs(Fix.currentMs - 10);
+      Fix.minMsReached = Math.min(Fix.minMsReached, Fix.currentMs);
       if(Fix.lapsLeft <= 0){
         fixStop(true);
+        return;
       }
     }
-  }, ms);
+
+    Fix.timerId = setTimeout(tick, Math.max(50, Math.round(Fix.currentMs)));
+  };
+
+  Fix.timerId = setTimeout(tick, Math.max(50, Math.round(Fix.currentMs)));
 }
 
 function fixPauseToggle(){
@@ -1147,7 +1426,7 @@ function fixPauseToggle(){
 
 function fixStop(completed=false){
   if(!Fix.running) return;
-  clearInterval(Fix.timerId);
+  clearTimeout(Fix.timerId);
   Fix.timerId = null;
 
   if(!Fix.paused && Fix.startedPerf != null){
@@ -1165,8 +1444,60 @@ function fixStop(completed=false){
       accuracy: completed ? 1 : 0,
       durationSec: Math.round(Fix.elapsedMs/1000),
       score: completed ? "OK" : "STOP",
+      minMsReached: Math.round(Fix.minMsReached || Fix.currentMs || Number($("#fixMs").value)||250),
     };
     addSessionToUser(Fix.session);
+    const u = getActiveUser();
+    if(!u) return;
+    let prof = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
+    const S = completed ? 1 : 0;
+    const curr = prof.currentParams;
+    const currItem = fixationItemRating(curr);
+    const upd = updateGlickoLite({ R_user: prof.R_user, RD_user: prof.RD_user, R_item: currItem, S });
+    prof.R_user = upd.R_user;
+    prof.RD_user = upd.RD_user;
+    prof.attempts_count += 1;
+    prof.lastSessionAt = nowIso();
+    prof = pushRollingResult(prof, S, { at: nowIso(), params: curr, stopped: !completed });
+
+    if(completed){
+      const ra = rollingAccuracy(prof.rollingResults);
+      if(ra !== null){
+        if(ra < 0.45) prof.fatigueBias = -5;
+        else if(ra > 0.90) prof.fatigueBias = 5;
+        else prof.fatigueBias = 0;
+      }
+      const target = targetItemRating(prof.R_user, prof.RD_user) + prof.fatigueBias * 10;
+      const cands = [];
+      for(const dH of [-100,0,100]) for(const dS of [-2,0,2]) for(const dD of [-1,0,1]) for(const dA of [-0.1,0,0.1]){
+        cands.push({
+          holdMs: clamp((curr.holdMs ?? 600)+dH, 300, 2000),
+          targetSizePx: clamp((curr.targetSizePx ?? 24)+dS, 10, 40),
+          distractorCount: clamp((curr.distractorCount ?? 2)+dD, 0, 8),
+          amplitude: clamp((curr.amplitude ?? 1.0)+dA, 0.5, 2.0),
+          motionFlag: curr.motionFlag ?? 0,
+        });
+      }
+      if(prof.attempts_count % 5 === 0){
+        cands.push({ ...curr, motionFlag: curr.motionFlag ? 0 : 1 });
+      }
+      const next = selectCandidate({ currentParams: curr, candidates: cands, itemRating: fixationItemRating, targetRating: target }) || curr;
+      prof.currentParams = next;
+      if(fixationItemRating(next) > fixationItemRating(prof.bestParams)) prof.bestParams = { ...next };
+    }else{
+      // user pressed Stop because comprehension dropped: offer a slower starting speed next time
+      const restartMs = clamp((Fix.minMsReached || curr.holdMs || 600) + 40, 300, 2200);
+      prof.currentParams = {
+        ...curr,
+        holdMs: restartMs,
+      };
+      $("#fixStatus").textContent = `Interrotto: prossimo avvio da ${Math.round(restartMs)} ms.`;
+    }
+
+    u.settings.fixation.profile = prof;
+    applyFixAdaptiveParams(u);
+    $("#fixMs").value = String(clamp(Number(u.settings.fixation.ms)||250, 50, 3000));
+    saveState();
     Fix.session = null;
   }
   rerenderDashboard();
@@ -1221,6 +1552,22 @@ function importJsonFile(file){
 }
 
 // ---------- wiring ----------
+
+function bindNoAccount(){
+  const btn = $("#btnCreateFirstAccount");
+  if(!btn) return;
+  btn.addEventListener("click", ()=>{
+    const name = ($("#newAccountName")?.value || "").trim();
+    const pass = String($("#newAccountPassword")?.value || "");
+    if(!name){ alert("Inserisci un nome account."); return; }
+    if(pass.length < 4){ alert("Password minima: 4 caratteri."); return; }
+    addUser(name, pass);
+    $("#newAccountName").value = "";
+    $("#newAccountPassword").value = "";
+  });
+}
+
+
 function bindNav(){
   $$(".nav-item").forEach(b=>{
     b.addEventListener("click", ()=> showView(b.dataset.view));
@@ -1231,7 +1578,39 @@ function bindTopbar(){
   $("#userSelect").addEventListener("change", (e)=> setActiveUser(e.target.value));
   $("#btnAddUser").addEventListener("click", ()=>{
     const name = prompt("Nome nuovo utente:");
-    if(name) addUser(name);
+    if(!name) return;
+    const password = prompt("Imposta password per il nuovo account (minimo 4 caratteri):");
+    if(password == null) return;
+    if(String(password).length < 4){
+      alert("Password troppo corta. Minimo 4 caratteri.");
+      return;
+    }
+    addUser(name, password);
+  });
+  $("#btnDeleteUser").addEventListener("click", ()=>{
+    const u = getActiveUser();
+    if(!u) return;
+    if(!u?.auth?.passwordHash){
+      const setup = prompt(`L'account "${u.name}" non ha password. Impostane una ora (minimo 4 caratteri):`);
+      if(setup == null) return;
+      if(String(setup).length < 4){
+        alert("Password troppo corta. Minimo 4 caratteri.");
+        return;
+      }
+      u.auth = createPasswordAuth(setup);
+      saveState();
+      alert("Password impostata. Ripeti l'azione Elimina account per confermare.");
+      return;
+    }
+    const pass = prompt(`Inserisci la password dell'account "${u.name}" per confermare l'eliminazione:`);
+    if(pass == null) return;
+    if(!verifyPasswordAuth(u.auth, pass)){
+      alert("Password errata. Account non eliminato.");
+      return;
+    }
+    if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
+      deleteUser(u.id);
+    }
   });
   $("#btnSettings").addEventListener("click", openSettings);
 }
@@ -1257,7 +1636,7 @@ function bindDashboard(){
     const lang = ($("#readerLang")?.value) || getActiveUser().settings.reader.lang || "it";
     const lvl = computeReaderLevel(getActiveUser());
     const source = ($("#readerSource")?.value) || "wiki";
-    const info = await getAdaptiveText(lang, lvl.minWords, source);
+    const info = await getAdaptiveText(lang, lvl.minWords, source, $("#readerCustomText")?.value || "");
     setTextCache(lang, info);
     rerenderAll();
   });
@@ -1279,9 +1658,10 @@ function bindReader(){
   $("#btnReaderStop").addEventListener("click", ()=> readerStop(false));
 
   // save reader settings on change
-  ["readerLang","readerMode","readerWpm","readerChunk","readerMinWords","readerSource"].forEach(id=>{
+  ["readerLang","readerMode","readerWpm","readerChunk","readerMinWords","readerSource","readerCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
+    if(!u) return;
       u.settings.reader = {
         lang: $("#readerLang").value,
         mode: $("#readerMode").value,
@@ -1289,6 +1669,7 @@ function bindReader(){
         chunk: Number($("#readerChunk").value)||3,
         minWords: Number($("#readerMinWords").value)||180,
         source: $("#readerSource").value,
+        customText: $("#readerCustomText").value || "",
       };
       saveState();
       renderTextMeta();
@@ -1296,33 +1677,63 @@ function bindReader(){
   });
 }
 
+function withSpanGuard(action){
+  try{
+    action();
+  }catch(err){
+    console.error("Campo visivo error:", err);
+    const out = $("#spanResult");
+    if(out) out.textContent = `Errore Campo visivo: ${err?.message || err}`;
+    const stim = $("#spanStimulus");
+    if(stim){
+      stim.style.visibility = "visible";
+      stim.textContent = "⚠";
+    }
+  }
+}
+
+function spanHandleEnterAction(){
+  if(Span.current){
+    spanCheck();
+    return;
+  }
+  spanNewTrial();
+}
+
 function bindSpan(){
-  $("#btnSpanNew").addEventListener("click", spanNewTrial);
-  $("#btnSpanCheck").addEventListener("click", spanCheck);
-  $("#btnSpanEnd").addEventListener("click", spanEndSession);
+  $("#btnSpanNew").addEventListener("click", ()=> withSpanGuard(spanNewTrial));
+  $("#btnSpanCheck").addEventListener("click", ()=> withSpanGuard(spanCheck));
+  $("#btnSpanEnd").addEventListener("click", ()=> withSpanGuard(spanEndSession));
   $("#spanInput").addEventListener("keydown", (e)=>{
-    if(e.key==="Enter"){
+    if(e.key==="Enter" || e.key==="NumpadEnter"){
       e.preventDefault();
-      spanCheck();
+      withSpanGuard(spanHandleEnterAction);
     }
   });
-  ["spanMs","spanLen","spanAz","spanAZ","span09","spanUS","spanFont"].forEach(id=>{
+  document.addEventListener("keydown", (e)=>{
+    if((e.key!=="Enter" && e.key!=="NumpadEnter") || e.repeat) return;
+    const spanView = document.querySelector('.view[data-view="span"]');
+    if(spanView?.classList.contains("hidden")) return;
+    if(document.activeElement?.id === "spanInput") return;
+    e.preventDefault();
+    withSpanGuard(spanHandleEnterAction);
+  });
+
+  ["spanMs","spanFont"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       spanApplyFont();
       const u = getActiveUser();
-      u.settings.span = {
-        ms: Number($("#spanMs").value)||250,
-        len: Number($("#spanLen").value)||4,
-        az: $("#spanAz").checked,
-        AZ: $("#spanAZ").checked,
-        n09: $("#span09").checked,
-        us: $("#spanUS").checked,
-        font: Number($("#spanFont").value)||110
-      };
+    if(!u) return;
+      const defaults = defaultUserSettings();
+      u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaults)));
+      u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
+      u.settings.span.ms = Number($("#spanMs").value)||800;
+      u.settings.span.font = Number($("#spanFont").value)||110;
       saveState();
     });
   });
 }
+
 
 function bindFix(){
   $("#btnFixLoadText").addEventListener("click", ()=> fixLoadText().catch(err=>{
@@ -1332,9 +1743,11 @@ function bindFix(){
   $("#btnFixPause").addEventListener("click", fixPauseToggle);
   $("#btnFixStop").addEventListener("click", ()=> fixStop(false));
 
-  ["fixMs","fixLaps","fixCols","fixRows","fixMode","fixSegLen","fixLang","fixSource"].forEach(id=>{
+  ["fixMs","fixLaps","fixCols","fixRows","fixMode","fixSegLen","fixFont","fixLang","fixSource","fixCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
+    if(!u) return;
+      const prevProfile = u.settings?.fixation?.profile;
       u.settings.fixation = {
         ms: Number($("#fixMs").value)||250,
         laps: Number($("#fixLaps").value)||2,
@@ -1342,9 +1755,14 @@ function bindFix(){
         rows: Number($("#fixRows").value)||10,
         mode: $("#fixMode").value,
         segLen: Number($("#fixSegLen").value)||20,
+        font: Number($("#fixFont").value)||12,
         lang: $("#fixLang").value,
         source: $("#fixSource").value,
+        customText: $("#fixCustomText").value || "",
+        profile: normalizeAdaptiveProfile(prevProfile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 }),
       };
+      fixSetCurrentMs(Number($("#fixMs").value)||250);
+      fixApplyFont();
       saveState();
     });
   });
@@ -1353,6 +1771,7 @@ function bindFix(){
 function bindData(){
   $("#btnWipeUser").addEventListener("click", ()=>{
     const u = getActiveUser();
+    if(!u) return;
     if(confirm(`Azzero tutte le sessioni per ${u.name}?`)){
       wipeUser(u.id);
     }
@@ -1376,34 +1795,40 @@ function bindSettings(){
 function applyUserSettingsToForm(){
   const u = getActiveUser();
 
+  applyReaderAdaptiveParams(u);
   const lvl = computeReaderLevel(u);
-  const rs = u.settings.reader || defaultState().users[0].settings.reader;
+  const rs = u.settings.reader || defaultUserSettings().reader;
   $("#readerLang").value = rs.lang || "it";
   $("#readerMode").value = rs.mode || "rsvp";
   $("#readerWpm").value = String(rs.wpm ?? lvl.baseWpm);
   $("#readerChunk").value = String(rs.chunk ?? 3);
   $("#readerMinWords").value = String(rs.minWords ?? lvl.minWords);
   $("#readerSource").value = rs.source || "wiki";
+  $("#readerCustomText").value = rs.customText || "";
 
-  const sp = u.settings.span || defaultState().users[0].settings.span;
-  $("#spanMs").value = String(sp.ms ?? 250);
-  $("#spanLen").value = String(sp.len ?? 4);
-  $("#spanAz").checked = !!sp.az;
-  $("#spanAZ").checked = !!sp.AZ;
-  $("#span09").checked = !!sp.n09;
-  $("#spanUS").checked = !!sp.us;
+  const spl = computeSpanLevel(u);
+  const sp = u.settings.span || defaultUserSettings().span;
+  sp.profile = normalizeSpanProfile(sp.profile || {});
+  $("#spanMs").value = String(clamp(Number(sp.ms ?? spl.ms), 40, 3000));
   $("#spanFont").value = String(sp.font ?? 110);
   spanApplyFont();
+  renderSpanStatus();
 
-  const fx = u.settings.fixation || defaultState().users[0].settings.fixation;
-  $("#fixMs").value = String(fx.ms ?? 250);
-  $("#fixLaps").value = String(fx.laps ?? 2);
+  applyFixAdaptiveParams(u);
+  const fxl = computeFixLevel(u);
+  const fx = u.settings.fixation || defaultUserSettings().fixation;
+  $("#fixMs").value = String(fx.ms ?? fxl.ms);
+  fixSetCurrentMs(Number($("#fixMs").value)||250);
+  $("#fixLaps").value = String(fx.laps ?? fxl.laps);
   $("#fixCols").value = String(fx.cols ?? 3);
-  $("#fixRows").value = String(fx.rows ?? 10);
+  $("#fixRows").value = String(fx.rows ?? fxl.rows);
   $("#fixMode").value = fx.mode ?? "dots";
   $("#fixSegLen").value = String(fx.segLen ?? 20);
+  $("#fixFont").value = String(fx.font ?? 12);
+  fixApplyFont();
   $("#fixLang").value = fx.lang ?? "it";
   $("#fixSource").value = fx.source ?? "wiki";
+  $("#fixCustomText").value = fx.customText || "";
 }
 
 function rerenderDashboard(){
@@ -1415,6 +1840,13 @@ function rerenderDashboard(){
 
 function rerenderAll(){
   renderUserSelect();
+  const noAccount = !STATE.users.length;
+  $("#noAccountPanel")?.classList.toggle("hidden", !noAccount);
+  $(".layout")?.classList.toggle("hidden", noAccount);
+  if(noAccount){
+    renderSyncStatus();
+    return;
+  }
   applyUserSettingsToForm();
   rerenderDashboard();
   renderSyncStatus();
@@ -1433,12 +1865,15 @@ function boot(){
   bindFix();
   bindData();
   bindSettings();
+  bindNoAccount();
 
   syncInit().finally(()=>{
     rerenderAll();
   });
 
-  showView("dashboard");
+  if(STATE.users.length){
+    showView("dashboard");
+  }
   readerResetRuntime();
 }
 
