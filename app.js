@@ -73,6 +73,21 @@ function uid(){
   return "id_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
 }
 
+function hashPassword(raw){
+  const s = String(raw || "");
+  let h = 2166136261;
+  for(let i=0;i<s.length;i++){
+    h ^= s.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return `pw_${(h >>> 0).toString(16)}`;
+}
+
+function verifyPassword(user, candidate){
+  if(!user?.auth?.passwordHash) return false;
+  return user.auth.passwordHash === hashPassword(candidate);
+}
+
 function safeParseJson(s){
   try { return JSON.parse(s); } catch { return null; }
 }
