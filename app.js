@@ -1581,6 +1581,12 @@ function bindTopbar(){
       deleteUser(u.id);
     }
   });
+  $("#btnDeleteUser").addEventListener("click", ()=>{
+    const u = getActiveUser();
+    if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
+      deleteUser(u.id);
+    }
+  });
   $("#btnSettings").addEventListener("click", openSettings);
 }
 
