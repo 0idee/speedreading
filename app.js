@@ -96,6 +96,10 @@ function ensureObject(value, fallback){
   return (value && typeof value === "object" && !Array.isArray(value)) ? value : fallback;
 }
 
+function isValidEmail(email){
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+}
+
 function wordsOf(text){
   return text
     .replace(/\s+/g, " ")
@@ -133,6 +137,7 @@ function defaultState(){
       {
         id: userId,
         name: "Luca",
+        email: "",
         createdAt: nowIso(),
         sessions: [],
         auth: createPasswordAuth("1234"),
@@ -161,6 +166,7 @@ function migrateState(st){
   const defaults = defaultUserSettings();
   for(const u of st.users){
     if(!u.sessions) u.sessions = [];
+    if(typeof u.email !== "string") u.email = "";
     u.auth = ensureObject(u.auth, { passwordHash: "", salt: "" });
     if(typeof u.auth.passwordHash !== "string") u.auth.passwordHash = "";
     if(typeof u.auth.salt !== "string") u.auth.salt = "";
@@ -205,6 +211,7 @@ function loadState(){
 
 let STATE = loadState();
 let SAVE_DEBOUNCE = null;
+let SESSION_AUTH_USER_ID = null;
 
 function saveState(){
   localStorage.setItem(APP_KEY, JSON.stringify(STATE));
@@ -431,17 +438,20 @@ function setActiveUser(userId){
     }
   }
   STATE.activeUserId = userId;
+  SESSION_AUTH_USER_ID = userId;
   saveState();
   rerenderAll();
 }
 
-function addUser(name, password){
+function addUser(name, password, email=""){
   const clean = (name || "").trim();
   const pass = String(password || "");
-  if(!clean || pass.length < 4) return;
+  const mail = String(email || "").trim();
+  if(!clean || pass.length < 4 || !isValidEmail(mail)) return;
   const u = {
     id: uid(),
     name: clean,
+    email: mail,
     createdAt: nowIso(),
     sessions: [],
     auth: createPasswordAuth(pass),
@@ -1573,15 +1583,90 @@ function bindNoAccount(){
   if(!btn) return;
   btn.addEventListener("click", ()=>{
     const name = ($("#newAccountName")?.value || "").trim();
+    const email = String($("#newAccountEmail")?.value || "").trim();
     const pass = String($("#newAccountPassword")?.value || "");
     if(!name){ alert("Inserisci un nome account."); return; }
+    if(!isValidEmail(email)){ alert("Inserisci una email valida."); return; }
     if(pass.length < 4){ alert("Password minima: 4 caratteri."); return; }
-    addUser(name, pass);
+    addUser(name, pass, email);
     $("#newAccountName").value = "";
+    $("#newAccountEmail").value = "";
     $("#newAccountPassword").value = "";
   });
 }
 
+
+function renderLoginGate(){
+  const gate = $("#loginGate");
+  const noAccount = !STATE.users.length;
+  if(!gate) return;
+  gate.classList.toggle("hidden", noAccount || !!SESSION_AUTH_USER_ID);
+  if(noAccount || SESSION_AUTH_USER_ID) return;
+  const sel = $("#loginUserSelect");
+  sel.innerHTML = "";
+  STATE.users.forEach(u=>{
+    const o = document.createElement("option");
+    o.value = u.id;
+    o.textContent = u.name;
+    sel.appendChild(o);
+  });
+  if(STATE.activeUserId && STATE.users.some(u=>u.id===STATE.activeUserId)) sel.value = STATE.activeUserId;
+  $("#loginStatus").textContent = "Seleziona utente e inserisci password.";
+}
+
+function bindLoginGate(){
+  const btn = $("#btnLoginUser");
+  if(!btn) return;
+  btn.addEventListener("click", ()=>{
+    const userId = $("#loginUserSelect")?.value;
+    const pass = String($("#loginPassword")?.value || "");
+    const user = STATE.users.find(u=>u.id===userId);
+    if(!user){ $("#loginStatus").textContent = "Utente non trovato."; return; }
+    if(!verifyPasswordAuth(user.auth, pass)){
+      $("#loginStatus").textContent = "Password errata.";
+      return;
+    }
+    SESSION_AUTH_USER_ID = user.id;
+    STATE.activeUserId = user.id;
+    saveState();
+    $("#loginPassword").value = "";
+    rerenderAll();
+  });
+}
+
+function forgotPasswordFlow(){
+  if(!STATE.users.length){ alert("Nessun utente registrato."); return; }
+  const username = prompt("Recupero password: inserisci nome utente:");
+  if(!username) return;
+  const u = STATE.users.find(x=>x.name.toLowerCase()===username.trim().toLowerCase());
+  if(!u){ alert("Utente non trovato."); return; }
+  const email = prompt(`Inserisci l'email di recupero per ${u.name}:`);
+  if(email == null) return;
+  if(String(email).trim().toLowerCase() !== String(u.email||"").trim().toLowerCase()){
+    alert("Email non corrispondente.");
+    return;
+  }
+  const newPass = prompt("Nuova password (minimo 4 caratteri):");
+  if(newPass == null) return;
+  if(String(newPass).length < 4){ alert("Password troppo corta."); return; }
+  u.auth = createPasswordAuth(newPass);
+  saveState();
+  alert("Password reimpostata. (In app locale non è possibile inviare email reali: recupero simulato con verifica email.)");
+}
+
+function changePasswordFlow(){
+  const u = getActiveUser();
+  if(!u){ alert("Nessun utente attivo."); return; }
+  const oldPass = prompt("Inserisci la password attuale:");
+  if(oldPass == null) return;
+  if(!verifyPasswordAuth(u.auth, oldPass)){ alert("Password attuale errata."); return; }
+  const newPass = prompt("Inserisci la nuova password (minimo 4 caratteri):");
+  if(newPass == null) return;
+  if(String(newPass).length < 4){ alert("Password troppo corta."); return; }
+  u.auth = createPasswordAuth(newPass);
+  saveState();
+  alert("Password aggiornata.");
+}
 
 function bindNav(){
   $$(".nav-item").forEach(b=>{
@@ -1594,13 +1679,16 @@ function bindTopbar(){
   $("#btnAddUser").addEventListener("click", ()=>{
     const name = prompt("Nome nuovo utente:");
     if(!name) return;
+    const email = prompt("Email di recupero password:");
+    if(email == null) return;
+    if(!isValidEmail(email)){ alert("Email non valida."); return; }
     const password = prompt("Imposta password per il nuovo account (minimo 4 caratteri):");
     if(password == null) return;
     if(String(password).length < 4){
       alert("Password troppo corta. Minimo 4 caratteri.");
       return;
     }
-    addUser(name, password);
+    addUser(name, password, email);
   });
   $("#btnDeleteUser").addEventListener("click", ()=>{
     const u = getActiveUser();
@@ -1627,6 +1715,8 @@ function bindTopbar(){
       deleteUser(u.id);
     }
   });
+  $("#btnForgotPassword")?.addEventListener("click", forgotPasswordFlow);
+  $("#btnChangePassword")?.addEventListener("click", changePasswordFlow);
   $("#btnSettings").addEventListener("click", openSettings);
 }
 
@@ -1856,9 +1946,11 @@ function rerenderDashboard(){
 function rerenderAll(){
   renderUserSelect();
   const noAccount = !STATE.users.length;
+  const needsLogin = !noAccount && !SESSION_AUTH_USER_ID;
   $("#noAccountPanel")?.classList.toggle("hidden", !noAccount);
-  $(".layout")?.classList.toggle("hidden", noAccount);
-  if(noAccount){
+  renderLoginGate();
+  $(".layout")?.classList.toggle("hidden", noAccount || needsLogin);
+  if(noAccount || needsLogin){
     renderSyncStatus();
     return;
   }
@@ -1881,8 +1973,10 @@ function boot(){
   bindData();
   bindSettings();
   bindNoAccount();
+  bindLoginGate();
 
   syncInit().finally(()=>{
+    SESSION_AUTH_USER_ID = null;
     rerenderAll();
   });
 
