@@ -1,6 +1,7 @@
 import { defaultSpanProfile, normalizeSpanProfile, generateSpanStimulus, evaluateSpanAttempt, updateSpanProgress, pushSpanRollingResult } from "./visual-span.js";
 import { defaultAdaptiveProfile, normalizeAdaptiveProfile, updateGlickoLite, targetItemRating, selectCandidate, pushRollingResult, rollingAccuracy } from "./adaptive-glicko.js";
 import { validateReaderDb, buildReaderRenderModel, isExactCorrectAnswer } from "./reader-quiz.js";
+import { createPasswordAuth, verifyPasswordAuth } from "./account-auth.js";
 // SpeedRead Trainer V2 (no build tools, Brave-friendly)
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
@@ -134,7 +135,7 @@ function defaultState(){
         name: "Luca",
         createdAt: nowIso(),
         sessions: [],
-        auth: { passwordHash: hashPassword("1234") },
+        auth: createPasswordAuth("1234"),
         settings: defaultUserSettings()
       }
     ],
@@ -160,8 +161,9 @@ function migrateState(st){
   const defaults = defaultUserSettings();
   for(const u of st.users){
     if(!u.sessions) u.sessions = [];
-    u.auth = ensureObject(u.auth, { passwordHash: "" });
+    u.auth = ensureObject(u.auth, { passwordHash: "", salt: "" });
     if(typeof u.auth.passwordHash !== "string") u.auth.passwordHash = "";
+    if(typeof u.auth.salt !== "string") u.auth.salt = "";
     if(!u.settings || typeof u.settings !== "object") u.settings = JSON.parse(JSON.stringify(defaults));
     u.settings.reader = ensureObject(u.settings.reader, JSON.parse(JSON.stringify(defaults.reader)));
     u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
@@ -364,17 +366,27 @@ async function getAdaptiveText(lang, minWords, source, customText=""){
     return { title: "Testo personalizzato", text, sourceUrl: null, wordCount };
   }
   if(source === "santi-db") {
-    const db = await loadReaderDb();
-    const items = db.items.filter(it => typeof it?.text === "string" && wordsOf(it.text).length >= minWords);
-    const chosen = pick(items.length ? items : db.items);
-    const model = buildReaderRenderModel(chosen, 20);
-    return {
-      title: model.title,
-      text: model.text,
-      sourceUrl: null,
-      wordCount: wordsOf(model.text).length,
-      quizQuestions: model.questions
-    };
+    try{
+      const db = await loadReaderDb();
+      const items = db.items.filter(it => typeof it?.text === "string" && wordsOf(it.text).length >= minWords);
+      const chosen = pick(items.length ? items : db.items);
+      const model = buildReaderRenderModel(chosen, 4);
+      if(model.questions.length < 4){
+        console.warn("Dataset con meno di 4 domande: fallback controllato attivo");
+      }
+      return {
+        title: model.title,
+        text: model.text,
+        sourceUrl: null,
+        wordCount: wordsOf(model.text).length,
+        quizQuestions: model.questions
+      };
+    }catch(err){
+      console.warn("Errore validazione dataset Lettura Veloce, fallback offline:", err);
+      const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
+      const text = t.join("\n\n");
+      return { title: "Offline (dataset fallback)", text, sourceUrl: null, wordCount: wordsOf(text).length, quizQuestions: [] };
+    }
   }
   if(source === "offline"){
     const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
@@ -402,10 +414,22 @@ async function getAdaptiveText(lang, minWords, source, customText=""){
 
 // ---------- UI state helpers ----------
 function getActiveUser(){
-  return STATE.users.find(u=>u.id===STATE.activeUserId) || STATE.users[0];
+  if(!STATE.users.length) return null;
+  return STATE.users.find(u=>u.id===STATE.activeUserId) || STATE.users[0] || null;
 }
 
 function setActiveUser(userId){
+  const target = STATE.users.find(u=>u.id===userId);
+  if(!target) return;
+  if(target?.auth?.passwordHash){
+    const pass = prompt(`Password per accedere a "${target.name}":`);
+    if(pass == null) return;
+    if(!verifyPasswordAuth(target.auth, pass)){
+      alert("Password errata.");
+      renderUserSelect();
+      return;
+    }
+  }
   STATE.activeUserId = userId;
   saveState();
   rerenderAll();
@@ -420,7 +444,7 @@ function addUser(name, password){
     name: clean,
     createdAt: nowIso(),
     sessions: [],
-    auth: { passwordHash: hashPassword(pass) },
+    auth: createPasswordAuth(pass),
     settings: JSON.parse(JSON.stringify(defaultState().users[0].settings)),
   };
   STATE.users.push(u);
@@ -442,9 +466,7 @@ function deleteUser(userId){
   if(idx === -1) return;
   STATE.users.splice(idx, 1);
   if(!STATE.users.length){
-    const fresh = defaultState();
-    STATE.users = fresh.users;
-    STATE.activeUserId = fresh.activeUserId;
+    STATE.activeUserId = null;
   } else if(STATE.activeUserId === userId){
     STATE.activeUserId = STATE.users[0].id;
   }
@@ -650,6 +672,11 @@ function renderTextMeta(){
 function renderUserSelect(){
   const sel = $("#userSelect");
   sel.innerHTML = "";
+  if(!STATE.users.length){
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
   for(const u of STATE.users){
     const opt = document.createElement("option");
     opt.value = u.id;
@@ -928,7 +955,7 @@ function readerPauseToggle(){
 function buildQuizFromText(text, lang){
   const cached = getTextCache(lang);
   if(Array.isArray(cached?.quizQuestions) && cached.quizQuestions.length){
-    return cached.quizQuestions.slice(0,20).map(q=> ({ ...q, chosen: null }));
+    return cached.quizQuestions.slice(0,4).map(q=> ({ ...q, chosen: null }));
   }
   return [];
 }
@@ -944,7 +971,7 @@ function renderQuiz(quiz){
     const div = document.createElement("div");
     div.className = "q";
     div.innerHTML = `
-      <div class="q-title">Domanda ${idx+1}: quale parola era nel testo?</div>
+      <div class="q-title">Domanda ${idx+1}: ${q.prompt}</div>
       <div class="opts"></div>
     `;
     const optsBox = div.querySelector(".opts");
@@ -1007,6 +1034,7 @@ function readerStop(completed=false){
     addSessionToUser(Reader.session);
     if(completed){
       const u = getActiveUser();
+    if(!u) return;
       let prof = normalizeAdaptiveProfile(u.settings.reader.profile, { exposureMs: 250, stimulusSize: 8, complexity: 1.0 });
       const S = Number.isFinite(accuracy) ? clamp(accuracy, 0, 1) : 0;
       const curr = prof.currentParams;
@@ -1435,6 +1463,7 @@ function fixStop(completed=false){
     };
     addSessionToUser(Fix.session);
     const u = getActiveUser();
+    if(!u) return;
     let prof = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
     const S = completed ? 1 : 0;
     const curr = prof.currentParams;
@@ -1538,6 +1567,22 @@ function importJsonFile(file){
 }
 
 // ---------- wiring ----------
+
+function bindNoAccount(){
+  const btn = $("#btnCreateFirstAccount");
+  if(!btn) return;
+  btn.addEventListener("click", ()=>{
+    const name = ($("#newAccountName")?.value || "").trim();
+    const pass = String($("#newAccountPassword")?.value || "");
+    if(!name){ alert("Inserisci un nome account."); return; }
+    if(pass.length < 4){ alert("Password minima: 4 caratteri."); return; }
+    addUser(name, pass);
+    $("#newAccountName").value = "";
+    $("#newAccountPassword").value = "";
+  });
+}
+
+
 function bindNav(){
   $$(".nav-item").forEach(b=>{
     b.addEventListener("click", ()=> showView(b.dataset.view));
@@ -1559,6 +1604,7 @@ function bindTopbar(){
   });
   $("#btnDeleteUser").addEventListener("click", ()=>{
     const u = getActiveUser();
+    if(!u) return;
     if(!u?.auth?.passwordHash){
       const setup = prompt(`L'account "${u.name}" non ha password. Impostane una ora (minimo 4 caratteri):`);
       if(setup == null) return;
@@ -1566,14 +1612,14 @@ function bindTopbar(){
         alert("Password troppo corta. Minimo 4 caratteri.");
         return;
       }
-      u.auth = { passwordHash: hashPassword(setup) };
+      u.auth = createPasswordAuth(setup);
       saveState();
       alert("Password impostata. Ripeti l'azione Elimina account per confermare.");
       return;
     }
     const pass = prompt(`Inserisci la password dell'account "${u.name}" per confermare l'eliminazione:`);
     if(pass == null) return;
-    if(!verifyPassword(u, pass)){
+    if(!verifyPasswordAuth(u.auth, pass)){
       alert("Password errata. Account non eliminato.");
       return;
     }
@@ -1630,6 +1676,7 @@ function bindReader(){
   ["readerLang","readerMode","readerWpm","readerChunk","readerMinWords","readerSource","readerCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
+    if(!u) return;
       u.settings.reader = {
         lang: $("#readerLang").value,
         mode: $("#readerMode").value,
@@ -1691,6 +1738,7 @@ function bindSpan(){
     $("#"+id).addEventListener("change", ()=>{
       spanApplyFont();
       const u = getActiveUser();
+    if(!u) return;
       const defaults = defaultUserSettings();
       u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaults)));
       u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
@@ -1713,6 +1761,7 @@ function bindFix(){
   ["fixMs","fixLaps","fixCols","fixRows","fixMode","fixSegLen","fixFont","fixLang","fixSource","fixCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
+    if(!u) return;
       const prevProfile = u.settings?.fixation?.profile;
       u.settings.fixation = {
         ms: Number($("#fixMs").value)||250,
@@ -1737,6 +1786,7 @@ function bindFix(){
 function bindData(){
   $("#btnWipeUser").addEventListener("click", ()=>{
     const u = getActiveUser();
+    if(!u) return;
     if(confirm(`Azzero tutte le sessioni per ${u.name}?`)){
       wipeUser(u.id);
     }
@@ -1805,6 +1855,13 @@ function rerenderDashboard(){
 
 function rerenderAll(){
   renderUserSelect();
+  const noAccount = !STATE.users.length;
+  $("#noAccountPanel")?.classList.toggle("hidden", !noAccount);
+  $(".layout")?.classList.toggle("hidden", noAccount);
+  if(noAccount){
+    renderSyncStatus();
+    return;
+  }
   applyUserSettingsToForm();
   rerenderDashboard();
   renderSyncStatus();
@@ -1823,12 +1880,15 @@ function boot(){
   bindFix();
   bindData();
   bindSettings();
+  bindNoAccount();
 
   syncInit().finally(()=>{
     rerenderAll();
   });
 
-  showView("dashboard");
+  if(STATE.users.length){
+    showView("dashboard");
+  }
   readerResetRuntime();
 }
 
