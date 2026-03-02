@@ -1,10 +1,13 @@
 import { defaultSpanProfile, normalizeSpanProfile, generateSpanStimulus, evaluateSpanAttempt, updateSpanProgress, pushSpanRollingResult } from "./visual-span.js";
 import { defaultAdaptiveProfile, normalizeAdaptiveProfile, updateGlickoLite, targetItemRating, selectCandidate, pushRollingResult, rollingAccuracy } from "./adaptive-glicko.js";
+import { validateReaderDb, buildReaderRenderModel, isExactCorrectAnswer } from "./reader-quiz.js";
+import { createPasswordAuth, verifyPasswordAuth } from "./account-auth.js";
 // SpeedRead Trainer V2 (no build tools, Brave-friendly)
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
 const APP_KEY = "speedread_trainer_v2_state";
 const APP_VERSION = 5;
+const READER_DB_URL = "./data/lettura_veloce_santi_it_v1.json";
 
 const EXERCISES = {
   reader: { id: "reader", name: "Lettura veloce" },
@@ -25,10 +28,22 @@ const OFFLINE_TEXTS = {
   ],
 };
 
+let READER_DB_CACHE = null;
+
+async function loadReaderDb(){
+  if(READER_DB_CACHE) return READER_DB_CACHE;
+  const res = await fetch(READER_DB_URL);
+  if(!res.ok) throw new Error("Database Lettura Veloce non disponibile");
+  const json = await res.json();
+  READER_DB_CACHE = validateReaderDb(json);
+  return READER_DB_CACHE;
+}
+
 const STOPWORDS = {
   it: new Set(["il","lo","la","i","gli","le","un","uno","una","di","a","da","in","su","per","tra","fra","e","o","che","del","della","dei","delle","al","allo","alla","ai","agli","alle","nel","nello","nella","nei","nelle","con","non","più","come","se"]),
   en: new Set(["the","a","an","of","to","in","on","for","and","or","that","with","as","at","by","from","is","are","was","were","be","been","this","these","those","it","its","not","more","than"])
 };
+
 
 function defaultUserSettings(){
   return {
@@ -58,12 +73,31 @@ function uid(){
   return "id_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
 }
 
+function hashPassword(raw){
+  const s = String(raw || "");
+  let h = 2166136261;
+  for(let i=0;i<s.length;i++){
+    h ^= s.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return `pw_${(h >>> 0).toString(16)}`;
+}
+
+function verifyPassword(user, candidate){
+  if(!user?.auth?.passwordHash) return false;
+  return user.auth.passwordHash === hashPassword(candidate);
+}
+
 function safeParseJson(s){
   try { return JSON.parse(s); } catch { return null; }
 }
 
 function ensureObject(value, fallback){
   return (value && typeof value === "object" && !Array.isArray(value)) ? value : fallback;
+}
+
+function isValidEmail(email){
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }
 
 function wordsOf(text){
@@ -103,8 +137,10 @@ function defaultState(){
       {
         id: userId,
         name: "Luca",
+        email: "",
         createdAt: nowIso(),
         sessions: [],
+        auth: createPasswordAuth("1234"),
         settings: defaultUserSettings()
       }
     ],
@@ -130,6 +166,10 @@ function migrateState(st){
   const defaults = defaultUserSettings();
   for(const u of st.users){
     if(!u.sessions) u.sessions = [];
+    if(typeof u.email !== "string") u.email = "";
+    u.auth = ensureObject(u.auth, { passwordHash: "", salt: "" });
+    if(typeof u.auth.passwordHash !== "string") u.auth.passwordHash = "";
+    if(typeof u.auth.salt !== "string") u.auth.salt = "";
     if(!u.settings || typeof u.settings !== "object") u.settings = JSON.parse(JSON.stringify(defaults));
     u.settings.reader = ensureObject(u.settings.reader, JSON.parse(JSON.stringify(defaults.reader)));
     u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
@@ -171,6 +211,7 @@ function loadState(){
 
 let STATE = loadState();
 let SAVE_DEBOUNCE = null;
+let SESSION_AUTH_USER_ID = null;
 
 function saveState(){
   localStorage.setItem(APP_KEY, JSON.stringify(STATE));
@@ -331,6 +372,29 @@ async function getAdaptiveText(lang, minWords, source, customText=""){
     if(wordCount < 40) throw new Error("Incolla almeno 40 parole nel testo personalizzato.");
     return { title: "Testo personalizzato", text, sourceUrl: null, wordCount };
   }
+  if(source === "santi-db") {
+    try{
+      const db = await loadReaderDb();
+      const items = db.items.filter(it => typeof it?.text === "string" && wordsOf(it.text).length >= minWords);
+      const chosen = pick(items.length ? items : db.items);
+      const model = buildReaderRenderModel(chosen, 4);
+      if(model.questions.length < 4){
+        console.warn("Dataset con meno di 4 domande: fallback controllato attivo");
+      }
+      return {
+        title: model.title,
+        text: model.text,
+        sourceUrl: null,
+        wordCount: wordsOf(model.text).length,
+        quizQuestions: model.questions
+      };
+    }catch(err){
+      console.warn("Errore validazione dataset Lettura Veloce, fallback offline:", err);
+      const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
+      const text = t.join("\n\n");
+      return { title: "Offline (dataset fallback)", text, sourceUrl: null, wordCount: wordsOf(text).length, quizQuestions: [] };
+    }
+  }
   if(source === "offline"){
     const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
     const text = t.join("\n\n");
@@ -357,16 +421,29 @@ async function getAdaptiveText(lang, minWords, source, customText=""){
 
 // ---------- UI state helpers ----------
 function getActiveUser(){
-  return STATE.users.find(u=>u.id===STATE.activeUserId) || STATE.users[0];
+  if(!STATE.users.length) return null;
+  return STATE.users.find(u=>u.id===STATE.activeUserId) || STATE.users[0] || null;
 }
 
 function setActiveUser(userId){
+  const target = STATE.users.find(u=>u.id===userId);
+  if(!target) return;
+  if(target?.auth?.passwordHash){
+    const pass = prompt(`Password per accedere a "${target.name}":`);
+    if(pass == null) return;
+    if(!verifyPasswordAuth(target.auth, pass)){
+      alert("Password errata.");
+      renderUserSelect();
+      return;
+    }
+  }
   STATE.activeUserId = userId;
+  SESSION_AUTH_USER_ID = userId;
   saveState();
   rerenderAll();
 }
 
-function addUser(name){
+function addUser(name, password, email=""){
   const clean = (name || "").trim();
   if(!clean) return;
   const u = createUserRecord(clean);
@@ -607,6 +684,11 @@ function renderTextMeta(){
 function renderUserSelect(){
   const sel = $("#userSelect");
   sel.innerHTML = "";
+  if(!STATE.users.length){
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
   for(const u of STATE.users){
     const opt = document.createElement("option");
     opt.value = u.id;
@@ -883,19 +965,11 @@ function readerPauseToggle(){
 }
 
 function buildQuizFromText(text, lang){
-  const w = wordsOf(text).map(x=>x.replace(/[^\p{L}\p{N}'-]/gu,"")).filter(Boolean);
-  const candidates = w.filter(x=>x.length>=4 && !(STOPWORDS[lang]?.has(x.toLowerCase())));
-  const unique = Array.from(new Set(candidates.map(x=>x.toLowerCase())));
-  if(unique.length < 8) return [];
-  const qs = [];
-  for(let i=0;i<3;i++){
-    const correct = pick(unique);
-    const distractPool = unique.filter(x=>x!==correct);
-    const distract = shuffle(distractPool).slice(0,3);
-    const opts = shuffle([correct, ...distract]);
-    qs.push({ id: uid(), correct, opts, chosen: null });
+  const cached = getTextCache(lang);
+  if(Array.isArray(cached?.quizQuestions) && cached.quizQuestions.length){
+    return cached.quizQuestions.slice(0,4).map(q=> ({ ...q, chosen: null }));
   }
-  return qs;
+  return [];
 }
 
 function renderQuiz(quiz){
@@ -909,7 +983,7 @@ function renderQuiz(quiz){
     const div = document.createElement("div");
     div.className = "q";
     div.innerHTML = `
-      <div class="q-title">Domanda ${idx+1}: quale parola era nel testo?</div>
+      <div class="q-title">Domanda ${idx+1}: ${q.prompt}</div>
       <div class="opts"></div>
     `;
     const optsBox = div.querySelector(".opts");
@@ -920,11 +994,12 @@ function renderQuiz(quiz){
       b.addEventListener("click", ()=>{
         if(q.chosen) return;
         q.chosen = opt;
-        b.classList.add(opt===q.correct ? "correct" : "wrong");
+        const isOk = isExactCorrectAnswer(q, opt);
+        b.classList.add(isOk ? "correct" : "wrong");
         // mark correct if chosen wrong
-        if(opt!==q.correct){
+        if(!isOk){
           Array.from(optsBox.children).forEach(ch=>{
-            if(ch.textContent===q.correct) ch.classList.add("correct");
+            if(isExactCorrectAnswer(q, ch.textContent)) ch.classList.add("correct");
           });
         }
       });
@@ -957,20 +1032,21 @@ function readerStop(completed=false){
   const quiz = cached ? buildQuizFromText(cached.text, cachedLang) : [];
   renderQuiz(quiz);
 
-  const accuracy = quiz.length ? (quiz.filter(q=>q.chosen===q.correct).length / quiz.length) : null;
+  const accuracy = quiz.length ? (quiz.filter(q=>isExactCorrectAnswer(q, q.chosen)).length / quiz.length) : null;
 
   if(Reader.session){
     Reader.session.endedAt = nowIso();
     Reader.session.metrics = {
       wpm: Number.isFinite(wpm) ? wpm : null,
       accuracy: Number.isFinite(accuracy) ? accuracy : null,
-      score: quiz.length ? `${quiz.filter(q=>q.chosen===q.correct).length}/${quiz.length}` : null,
+      score: quiz.length ? `${quiz.filter(q=>isExactCorrectAnswer(q, q.chosen)).length}/${quiz.length}` : null,
       durationSec: Math.round(Reader.elapsedMs/1000),
       wordCount: words,
     };
     addSessionToUser(Reader.session);
     if(completed){
       const u = getActiveUser();
+    if(!u) return;
       let prof = normalizeAdaptiveProfile(u.settings.reader.profile, { exposureMs: 250, stimulusSize: 8, complexity: 1.0 });
       const S = Number.isFinite(accuracy) ? clamp(accuracy, 0, 1) : 0;
       const curr = prof.currentParams;
@@ -1394,6 +1470,7 @@ function fixStop(completed=false){
     };
     addSessionToUser(Fix.session);
     const u = getActiveUser();
+    if(!u) return;
     let prof = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
     const S = completed ? 1 : 0;
     const curr = prof.currentParams;
@@ -1497,6 +1574,97 @@ function importJsonFile(file){
 }
 
 // ---------- wiring ----------
+
+function bindNoAccount(){
+  const btn = $("#btnCreateFirstAccount");
+  if(!btn) return;
+  btn.addEventListener("click", ()=>{
+    const name = ($("#newAccountName")?.value || "").trim();
+    const email = String($("#newAccountEmail")?.value || "").trim();
+    const pass = String($("#newAccountPassword")?.value || "");
+    if(!name){ alert("Inserisci un nome account."); return; }
+    if(!isValidEmail(email)){ alert("Inserisci una email valida."); return; }
+    if(pass.length < 4){ alert("Password minima: 4 caratteri."); return; }
+    addUser(name, pass, email);
+    $("#newAccountName").value = "";
+    $("#newAccountEmail").value = "";
+    $("#newAccountPassword").value = "";
+  });
+}
+
+
+function renderLoginGate(){
+  const gate = $("#loginGate");
+  const noAccount = !STATE.users.length;
+  if(!gate) return;
+  gate.classList.toggle("hidden", noAccount || !!SESSION_AUTH_USER_ID);
+  if(noAccount || SESSION_AUTH_USER_ID) return;
+  const sel = $("#loginUserSelect");
+  sel.innerHTML = "";
+  STATE.users.forEach(u=>{
+    const o = document.createElement("option");
+    o.value = u.id;
+    o.textContent = u.name;
+    sel.appendChild(o);
+  });
+  if(STATE.activeUserId && STATE.users.some(u=>u.id===STATE.activeUserId)) sel.value = STATE.activeUserId;
+  $("#loginStatus").textContent = "Seleziona utente e inserisci password.";
+}
+
+function bindLoginGate(){
+  const btn = $("#btnLoginUser");
+  if(!btn) return;
+  btn.addEventListener("click", ()=>{
+    const userId = $("#loginUserSelect")?.value;
+    const pass = String($("#loginPassword")?.value || "");
+    const user = STATE.users.find(u=>u.id===userId);
+    if(!user){ $("#loginStatus").textContent = "Utente non trovato."; return; }
+    if(!verifyPasswordAuth(user.auth, pass)){
+      $("#loginStatus").textContent = "Password errata.";
+      return;
+    }
+    SESSION_AUTH_USER_ID = user.id;
+    STATE.activeUserId = user.id;
+    saveState();
+    $("#loginPassword").value = "";
+    rerenderAll();
+  });
+}
+
+function forgotPasswordFlow(){
+  if(!STATE.users.length){ alert("Nessun utente registrato."); return; }
+  const username = prompt("Recupero password: inserisci nome utente:");
+  if(!username) return;
+  const u = STATE.users.find(x=>x.name.toLowerCase()===username.trim().toLowerCase());
+  if(!u){ alert("Utente non trovato."); return; }
+  const email = prompt(`Inserisci l'email di recupero per ${u.name}:`);
+  if(email == null) return;
+  if(String(email).trim().toLowerCase() !== String(u.email||"").trim().toLowerCase()){
+    alert("Email non corrispondente.");
+    return;
+  }
+  const newPass = prompt("Nuova password (minimo 4 caratteri):");
+  if(newPass == null) return;
+  if(String(newPass).length < 4){ alert("Password troppo corta."); return; }
+  u.auth = createPasswordAuth(newPass);
+  saveState();
+  alert("Password reimpostata. (In app locale non è possibile inviare email reali: recupero simulato con verifica email.)");
+}
+
+function changePasswordFlow(){
+  const u = getActiveUser();
+  if(!u){ alert("Nessun utente attivo."); return; }
+  const oldPass = prompt("Inserisci la password attuale:");
+  if(oldPass == null) return;
+  if(!verifyPasswordAuth(u.auth, oldPass)){ alert("Password attuale errata."); return; }
+  const newPass = prompt("Inserisci la nuova password (minimo 4 caratteri):");
+  if(newPass == null) return;
+  if(String(newPass).length < 4){ alert("Password troppo corta."); return; }
+  u.auth = createPasswordAuth(newPass);
+  saveState();
+  alert("Password aggiornata.");
+}
+
 function bindNav(){
   $$(".nav-item").forEach(b=>{
     b.addEventListener("click", ()=> showView(b.dataset.view));
@@ -1507,7 +1675,17 @@ function bindTopbar(){
   $("#userSelect").addEventListener("change", (e)=> setActiveUser(e.target.value));
   $("#btnAddUser").addEventListener("click", ()=>{
     const name = prompt("Nome nuovo utente:");
-    if(name) addUser(name);
+    if(!name) return;
+    const email = prompt("Email di recupero password:");
+    if(email == null) return;
+    if(!isValidEmail(email)){ alert("Email non valida."); return; }
+    const password = prompt("Imposta password per il nuovo account (minimo 4 caratteri):");
+    if(password == null) return;
+    if(String(password).length < 4){
+      alert("Password troppo corta. Minimo 4 caratteri.");
+      return;
+    }
+    addUser(name, password, email);
   });
   $("#btnDeleteUser").addEventListener("click", ()=>{
     const u = getActiveUser();
@@ -1524,6 +1702,8 @@ function bindTopbar(){
       deleteUser(u.id);
     }
   });
+  $("#btnForgotPassword")?.addEventListener("click", forgotPasswordFlow);
+  $("#btnChangePassword")?.addEventListener("click", changePasswordFlow);
   $("#btnSettings").addEventListener("click", openSettings);
 }
 
@@ -1573,6 +1753,7 @@ function bindReader(){
   ["readerLang","readerMode","readerWpm","readerChunk","readerMinWords","readerSource","readerCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
+    if(!u) return;
       u.settings.reader = {
         lang: $("#readerLang").value,
         mode: $("#readerMode").value,
@@ -1634,6 +1815,7 @@ function bindSpan(){
     $("#"+id).addEventListener("change", ()=>{
       spanApplyFont();
       const u = getActiveUser();
+    if(!u) return;
       const defaults = defaultUserSettings();
       u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaults)));
       u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
@@ -1656,6 +1838,7 @@ function bindFix(){
   ["fixMs","fixLaps","fixCols","fixRows","fixMode","fixSegLen","fixFont","fixLang","fixSource","fixCustomText"].forEach(id=>{
     $("#"+id).addEventListener("change", ()=>{
       const u = getActiveUser();
+    if(!u) return;
       const prevProfile = u.settings?.fixation?.profile;
       u.settings.fixation = {
         ms: Number($("#fixMs").value)||250,
@@ -1680,6 +1863,7 @@ function bindFix(){
 function bindData(){
   $("#btnWipeUser").addEventListener("click", ()=>{
     const u = getActiveUser();
+    if(!u) return;
     if(confirm(`Azzero tutte le sessioni per ${u.name}?`)){
       wipeUser(u.id);
     }
@@ -1748,6 +1932,15 @@ function rerenderDashboard(){
 
 function rerenderAll(){
   renderUserSelect();
+  const noAccount = !STATE.users.length;
+  const needsLogin = !noAccount && !SESSION_AUTH_USER_ID;
+  $("#noAccountPanel")?.classList.toggle("hidden", !noAccount);
+  renderLoginGate();
+  $(".layout")?.classList.toggle("hidden", noAccount || needsLogin);
+  if(noAccount || needsLogin){
+    renderSyncStatus();
+    return;
+  }
   applyUserSettingsToForm();
   rerenderDashboard();
   renderSyncStatus();
@@ -1766,12 +1959,17 @@ function boot(){
   bindFix();
   bindData();
   bindSettings();
+  bindNoAccount();
+  bindLoginGate();
 
   syncInit().finally(()=>{
+    SESSION_AUTH_USER_ID = null;
     rerenderAll();
   });
 
-  showView("dashboard");
+  if(STATE.users.length){
+    showView("dashboard");
+  }
   readerResetRuntime();
 }
 
