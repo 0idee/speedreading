@@ -445,18 +445,8 @@ function setActiveUser(userId){
 
 function addUser(name, password, email=""){
   const clean = (name || "").trim();
-  const pass = String(password || "");
-  const mail = String(email || "").trim();
-  if(!clean || pass.length < 4 || !isValidEmail(mail)) return;
-  const u = {
-    id: uid(),
-    name: clean,
-    email: mail,
-    createdAt: nowIso(),
-    sessions: [],
-    auth: createPasswordAuth(pass),
-    settings: JSON.parse(JSON.stringify(defaultState().users[0].settings)),
-  };
+  if(!clean) return;
+  const u = createUserRecord(clean);
   STATE.users.push(u);
   STATE.activeUserId = u.id;
   saveState();
@@ -471,12 +461,24 @@ function wipeUser(userId){
   rerenderAll();
 }
 
-function deleteUser(userId){
+function createUserRecord(name){
+  return {
+    id: uid(),
+    name: (name || "Nuovo utente").trim() || "Nuovo utente",
+    createdAt: nowIso(),
+    sessions: [],
+    settings: JSON.parse(JSON.stringify(defaultState().users[0].settings)),
+  };
+}
+
+function deleteUser(userId, replacementName){
   const idx = STATE.users.findIndex(x=>x.id===userId);
   if(idx === -1) return;
   STATE.users.splice(idx, 1);
   if(!STATE.users.length){
-    STATE.activeUserId = null;
+    const replacement = createUserRecord(replacementName);
+    STATE.users = [replacement];
+    STATE.activeUserId = replacement.id;
   } else if(STATE.activeUserId === userId){
     STATE.activeUserId = STATE.users[0].id;
   }
@@ -1415,19 +1417,14 @@ function fixStart(){
     }
 
     fixActivate(Fix.index);
-    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri rimasti: ${Fix.lapsLeft} • ${Math.round(Fix.currentMs)}ms`;
+    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri completati: ${Fix.lapsCompleted} • ${Math.round(Fix.currentMs)}ms`;
 
     Fix.index += 1;
     if(Fix.index >= Fix.total){
       Fix.index = 0;
-      Fix.lapsLeft -= 1;
       Fix.lapsCompleted += 1;
-      fixSetCurrentMs(Fix.currentMs - 10);
+      fixSetCurrentMs(Fix.currentMs - 50);
       Fix.minMsReached = Math.min(Fix.minMsReached, Fix.currentMs);
-      if(Fix.lapsLeft <= 0){
-        fixStop(true);
-        return;
-      }
     }
 
     Fix.timerId = setTimeout(tick, Math.max(50, Math.round(Fix.currentMs)));
@@ -1693,22 +1690,12 @@ function bindTopbar(){
   $("#btnDeleteUser").addEventListener("click", ()=>{
     const u = getActiveUser();
     if(!u) return;
-    if(!u?.auth?.passwordHash){
-      const setup = prompt(`L'account "${u.name}" non ha password. Impostane una ora (minimo 4 caratteri):`);
-      if(setup == null) return;
-      if(String(setup).length < 4){
-        alert("Password troppo corta. Minimo 4 caratteri.");
-        return;
+    if(STATE.users.length === 1){
+      const replacementName = prompt("Stai eliminando l'ultimo account. Inserisci il nome del nuovo utente:", "Nuovo utente");
+      if(replacementName === null) return;
+      if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
+        deleteUser(u.id, replacementName);
       }
-      u.auth = createPasswordAuth(setup);
-      saveState();
-      alert("Password impostata. Ripeti l'azione Elimina account per confermare.");
-      return;
-    }
-    const pass = prompt(`Inserisci la password dell'account "${u.name}" per confermare l'eliminazione:`);
-    if(pass == null) return;
-    if(!verifyPasswordAuth(u.auth, pass)){
-      alert("Password errata. Account non eliminato.");
       return;
     }
     if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){

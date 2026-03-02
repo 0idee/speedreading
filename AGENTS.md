@@ -257,6 +257,15 @@ Se rolling accuracy < 0.45 (per 5 tentativi):
 Se rolling accuracy > 0.90:
 - ridurre targetSize o aumentare holdMs con step piccoli
 
+### 4.7 Modalità testo e continuità giro
+Nel mode `text`:
+- il segmento testuale deve essere nascosto di default
+- il segmento si rende visibile solo nella cella attiva (quando la barretta gialla è illuminata)
+
+Continuità temporale intra-sessione:
+- a fine giro completo della griglia, il successivo parte automaticamente
+- riduzione velocità: `holdMs` diminuisce di 50ms per giro (clamp minimo UI/app)
+
 ---
 
 ## 5) Requisiti di test (obbligatori)
