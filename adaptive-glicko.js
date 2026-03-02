@@ -92,6 +92,26 @@ function paramDistance(a,b){
   return sum;
 }
 
+
+
+export function maxDirectionalSteps({ RD_user, attempts_count }){
+  const rd = Number(RD_user) || GLICKO_DEFAULT_RD;
+  const attempts = Number(attempts_count) || 0;
+  if(attempts < 6) return 1;
+  if(rd > 200) return 1;
+  if(rd < 120) return 2;
+  return 1;
+}
+
+export function selectDirectionalCandidate({ currentParams, candidates, itemRating, targetRating, direction = 'any' }){
+  if(!candidates?.length) return null;
+  const currentRating = itemRating(currentParams);
+  let filtered = candidates;
+  if(direction === 'harder') filtered = candidates.filter((c)=> itemRating(c) >= currentRating);
+  if(direction === 'easier') filtered = candidates.filter((c)=> itemRating(c) <= currentRating);
+  if(!filtered.length) filtered = candidates;
+  return selectCandidate({ currentParams, candidates: filtered, itemRating, targetRating });
+}
 function clampNum(n, min, max, fallback){
   const x = Number(n);
   if(!Number.isFinite(x)) return fallback;

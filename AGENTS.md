@@ -290,3 +290,14 @@ Quando cambi comportamento:
 2) poi implementa codice coerente
 3) aggiungi/aggiorna test
 4) aggiorna README solo a livello utente (non duplicare tutte le formule)
+
+### 6.1 Staircase intra-sessione (nuovo standard)
+Per tutti gli esercizi adattivi è ammesso/consigliato uno strato `staircase` intra-sessione
+(es. 1-up/2-down o 1-up/3-down) che **non sostituisce** il rating Glicko-lite,
+ma fornisce un vincolo direzionale `harder/easier` al selettore candidati.
+
+Requisiti minimi staircase:
+- stato persistibile: `{ nDown, stepSize, lastDirection, inversions, streaks }`
+- step-size inizialmente più grande, poi ridotto dopo inversioni
+- rispetto di clamp e limite delta in base a RD/attempts_count
+- in caso di conflitto con target rating, preferire sicurezza (variazione più piccola / più facile)

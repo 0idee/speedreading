@@ -1,7 +1,8 @@
-import { defaultSpanProfile, normalizeSpanProfile, generateSpanStimulus, evaluateSpanAttempt, updateSpanProgress, pushSpanRollingResult } from "./visual-span.js";
-import { defaultAdaptiveProfile, normalizeAdaptiveProfile, updateGlickoLite, targetItemRating, selectCandidate, pushRollingResult, rollingAccuracy } from "./adaptive-glicko.js";
-import { validateReaderDb, buildReaderRenderModel, isExactCorrectAnswer } from "./reader-quiz.js";
+import { defaultSpanProfile, normalizeSpanProfile, normalizeSpanParams, generateSpanStimulus, evaluateSpanAttempt, spanPartialScore, spanItemRating, buildSpanCandidates, maybePromoteSpanStage, pushSpanRollingResult } from "./visual-span.js";
+import { defaultAdaptiveProfile, normalizeAdaptiveProfile, updateGlickoLite, targetItemRating, selectCandidate, selectDirectionalCandidate, maxDirectionalSteps, pushRollingResult, rollingAccuracy } from "./adaptive-glicko.js";
+import { validateReaderDb, buildReaderRenderModel, isExactCorrectAnswer, normalizeQuestions } from "./reader-quiz.js";
 import { createPasswordAuth, verifyPasswordAuth } from "./account-auth.js";
+import { defaultStaircaseState, normalizeStaircaseState, staircaseDirectionFromScore, updateStaircase } from "./adaptive-staircase.js";
 // SpeedRead Trainer V2 (no build tools, Brave-friendly)
 // LocalStorage for data + optional Sync file (File System Access API on Chromium/Brave)
 
@@ -58,7 +59,7 @@ const STOPWORDS = {
 function defaultUserSettings(){
   return {
     reader: { lang: "it", mode: "rsvp", wpm: 350, chunk: 3, minWords: 180, source:"wiki", customText:"", profile: defaultAdaptiveProfile({ exposureMs: 250, stimulusSize: 8, complexity: 1.0 }) },
-    span: { ms: 800, font:110, profile: defaultSpanProfile() },
+    span: { ms: 800, font:110, profile: defaultSpanProfile(), staircase: defaultStaircaseState({ nDown: 3, stepSize: 1 }) },
     fixation: { ms: 250, laps: 2, cols: 3, rows: 10, mode: "dots", segLen: 20, font: 12, lang:"it", source:"wiki", customText:"", profile: defaultAdaptiveProfile({ holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 }) },
   };
 }
@@ -191,9 +192,10 @@ function migrateState(st){
     u.settings.fixation.profile = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
     if(!u.settings.span.profile){
       u.settings.span.profile = defaultSpanProfile();
-      if(Number.isFinite(u.settings.span.len)) u.settings.span.profile.currentLength = clamp(Number(u.settings.span.len), 4, 14);
     }
     u.settings.span.profile = normalizeSpanProfile(u.settings.span.profile);
+    u.settings.span.staircase = normalizeStaircaseState(u.settings.span.staircase || {}, { nDown: 3, stepSize: 1 });
+    u.settings.span.ms = clamp(Math.round(u.settings.span.profile.profileAdaptive.currentParams.exposureMs || 800), 80, 1200);
 
     // Fix the bug that caused: (a.startedAt||"").localeCompare is not a function
     // Ensure startedAt/endedAt are ISO strings (or null), not numbers/objects.
@@ -382,6 +384,21 @@ async function getAdaptiveText(lang, minWords, source, customText=""){
     if(wordCount < 40) throw new Error("Incolla almeno 40 parole nel testo personalizzato.");
     return { title: "Testo personalizzato", text, sourceUrl: null, wordCount };
   }
+  if(source === "santi-db"){
+    const r = await fetch(READER_DB_URL, { cache: "no-store" });
+    if(!r.ok) throw new Error("DB santi non disponibile");
+    const db = validateReaderDb(await r.json());
+    const pool = db.items.filter((it)=> wordsOf(it.text).length >= minWords);
+    const picked = pick(pool.length ? pool : db.items);
+    const model = buildReaderRenderModel(picked, 4);
+    return {
+      title: model.title,
+      text: model.text,
+      sourceUrl: null,
+      wordCount: wordsOf(model.text).length,
+      quizQuestions: model.questions,
+    };
+  }
   if(source === "saints-it"){
     const candidates = SAINTS_IT_TEXTS.filter(item => wordsOf(item.text).length >= minWords);
     const pool = candidates.length ? candidates : SAINTS_IT_TEXTS;
@@ -515,10 +532,11 @@ function computeReaderLevel(user){
 
 function computeSpanLevel(user){
   const profile = normalizeSpanProfile(user.settings?.span?.profile || {});
+  const curr = profile.profileAdaptive.currentParams;
   return {
-    level: profile.currentStage,
-    ms: user.settings?.span?.ms ?? 800,
-    len: profile.currentLength,
+    level: curr.stage,
+    ms: curr.exposureMs,
+    len: curr.length,
   };
 }
 
@@ -960,9 +978,25 @@ function readerPauseToggle(){
 function buildQuizFromText(text, lang){
   const cached = getTextCache(lang);
   if(Array.isArray(cached?.quizQuestions) && cached.quizQuestions.length){
-    return cached.quizQuestions.slice(0,4).map(q=> ({ ...q, chosen: null }));
+    return normalizeQuestions(cached.quizQuestions, 4).map(q=> ({ ...q, chosen: null }));
   }
-  return [];
+
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if(!clean) return [];
+  const sentences = clean.split(/(?<=[.!?])\s+/).filter(Boolean).slice(0, 4);
+  const fallback = sentences.map((s, idx)=>{
+    const words = s.split(' ').map((w)=>w.replace(/[^\p{L}\p{N}'’-]/gu, '')).filter((w)=>w.length > 3);
+    const answer = words[Math.floor(words.length / 2)] || words[0] || `termine${idx+1}`;
+    const distractors = ['sempre', 'mai', 'forse'].map((x)=> `${x}-${idx+1}`);
+    const opts = shuffle([answer, ...distractors]).slice(0, 4);
+    return {
+      prompt: `Quale parola compare nella frase ${idx + 1}?`,
+      opts,
+      correctIndex: opts.indexOf(answer),
+      chosen: null,
+    };
+  });
+  return fallback.slice(0, 4);
 }
 
 function renderQuiz(quiz){
@@ -1058,14 +1092,16 @@ function readerStop(completed=false){
       }
       const target = targetItemRating(prof.R_user, prof.RD_user) + prof.fatigueBias * 10;
       const cands = [];
-      for(const dMs of [-25,0,25]) for(const dSz of [-1,0,1]) for(const dCx of [-0.05,0,0.05]){
+      const dynMs = ra !== null && ra > 0.85 ? [-60,-40,-25,0,25] : (ra !== null && ra < 0.65 ? [90,60,25,0,-25] : [-25,0,25]);
+      for(const dMs of dynMs) for(const dSz of [-1,0,1]) for(const dCx of [-0.05,0,0.05]){
         cands.push({
           exposureMs: clamp((curr.exposureMs ?? 250) + dMs, 80, 600),
           stimulusSize: clamp((curr.stimulusSize ?? 8) + dSz, 4, 20),
           complexity: clamp((curr.complexity ?? 1.0) + dCx, 1.0, 1.5),
         });
       }
-      const next = selectCandidate({ currentParams: curr, candidates: cands, itemRating: readerItemRating, targetRating: target }) || curr;
+      const direction = ra !== null && ra > 0.85 ? 'harder' : (ra !== null && ra < 0.65 ? 'easier' : 'any');
+      const next = selectDirectionalCandidate({ currentParams: curr, candidates: cands, itemRating: readerItemRating, targetRating: target, direction }) || curr;
       prof.currentParams = next;
       if(readerItemRating(next) > readerItemRating(prof.bestParams)) prof.bestParams = { ...next };
       u.settings.reader.profile = prof;
@@ -1094,6 +1130,7 @@ function getSpanProfile(){
   u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaults)));
   u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
   u.settings.span.profile = normalizeSpanProfile(u.settings.span.profile || {});
+  u.settings.span.staircase = normalizeStaircaseState(u.settings.span.staircase || {}, { nDown: 3, stepSize: 1 });
   return u.settings.span.profile;
 }
 
@@ -1104,12 +1141,14 @@ function setSpanProfile(profile){
 
 function renderSpanStatus(){
   const p = getSpanProfile();
-  $("#spanStatus").textContent = `Livello: Stage ${p.currentStage} · ${p.currentLength} caratteri`;
+  const c = p.profileAdaptive.currentParams;
+  $("#spanStatus").textContent = `Livello: Stage ${c.stage} · ${c.length} caratteri · ${c.exposureMs}ms`;
 }
 
 function spanGenerate(){
   const p = getSpanProfile();
-  return generateSpanStimulus({ stage: p.currentStage, length: p.currentLength });
+  const c = p.profileAdaptive.currentParams;
+  return generateSpanStimulus({ stage: c.stage, length: c.length });
 }
 
 function spanApplyFont(){
@@ -1120,16 +1159,17 @@ function spanApplyFont(){
 function spanStartSessionIfNeeded(){
   if(Span.session) return;
   const profile = getSpanProfile();
+  const c = profile.profileAdaptive.currentParams;
   Span.session = {
     id: uid(),
     exerciseId: "span",
     startedAt: nowIso(),
     endedAt: null,
     config: {
-      ms: Number($("#spanMs").value)||800,
+      ms: c.exposureMs,
       font: Number($("#spanFont").value)||110,
-      startStage: profile.currentStage,
-      startLength: profile.currentLength,
+      startStage: c.stage,
+      startLength: c.length,
     },
     metrics: {},
     notes: {},
@@ -1148,7 +1188,10 @@ function spanNewTrial(){
   $("#spanInput").value = "";
   $("#spanInput").focus();
 
-  const ms = clamp(Number($("#spanMs").value)||800, 40, 3000);
+  const p = getSpanProfile();
+  const curr = p.profileAdaptive.currentParams;
+  const ms = clamp(Number(curr.exposureMs)||800, 40, 3000);
+  $("#spanMs").value = String(ms);
   const stim = spanGenerate();
   Span.current = stim;
   Span.shownAt = performance.now();
@@ -1164,16 +1207,65 @@ function spanNewTrial(){
 
 function spanCheck(){
   if(!Span.session || !Span.current) return;
+  const u = getActiveUser();
   const typed = ($("#spanInput").value||"").trim();
   const ok = evaluateSpanAttempt(Span.current, typed);
+  const S = spanPartialScore(Span.current, typed);
   Span.tries += 1;
   if(ok) Span.correct += 1;
 
   let profile = getSpanProfile();
-  profile = updateSpanProgress(profile, ok, { successStreakToGrow: 3 });
-  profile = pushSpanRollingResult(profile, { ok, at: nowIso() });
+  const adaptive = profile.profileAdaptive;
+  const curr = normalizeSpanParams(adaptive.currentParams);
+  const currItem = spanItemRating(curr);
+  const upd = updateGlickoLite({ R_user: adaptive.R_user, RD_user: adaptive.RD_user, R_item: currItem, S });
+  adaptive.R_user = upd.R_user;
+  adaptive.RD_user = upd.RD_user;
+  adaptive.attempts_count += 1;
+  adaptive.lastSessionAt = nowIso();
+  profile = pushSpanRollingResult(profile, S, { at: nowIso(), stage: curr.stage, length: curr.length, exposureMs: curr.exposureMs, ok });
+
+  const ra = rollingAccuracy(adaptive.rollingResults);
+  if(ra !== null){
+    if(ra < 0.45) adaptive.fatigueBias = -5;
+    else if(ra > 0.9) adaptive.fatigueBias = 5;
+    else adaptive.fatigueBias = 0;
+  }
+
+  const rawDir = staircaseDirectionFromScore(S, { successThreshold: 0.8 });
+  const stairState = normalizeStaircaseState(u.settings.span.staircase || {}, { nDown: 3, stepSize: 1 });
+  const stairOut = updateStaircase(stairState, rawDir, { nDown: 3 });
+  u.settings.span.staircase = stairOut.state;
+
+  const target = targetItemRating(adaptive.R_user, adaptive.RD_user) + adaptive.fatigueBias * 8;
+  const candidates = buildSpanCandidates(curr);
+  const dir = stairOut.direction === 'none' ? 'any' : stairOut.direction;
+  let next = selectDirectionalCandidate({
+    currentParams: curr,
+    candidates,
+    itemRating: spanItemRating,
+    targetRating: target,
+    direction: dir,
+  }) || curr;
+
+  const steps = maxDirectionalSteps({ RD_user: adaptive.RD_user, attempts_count: adaptive.attempts_count });
+  const maxLenDelta = steps;
+  const maxMsDelta = steps * 80;
+  next = normalizeSpanParams({
+    ...next,
+    length: clamp(next.length, curr.length - maxLenDelta, curr.length + maxLenDelta),
+    exposureMs: clamp(next.exposureMs, curr.exposureMs - maxMsDelta, curr.exposureMs + maxMsDelta),
+  });
+
+  adaptive.currentParams = next;
+  if(spanItemRating(next) > spanItemRating(adaptive.bestParams)) adaptive.bestParams = { ...next };
+  profile.profileAdaptive = adaptive;
   profile.lastSessionAt = nowIso();
+  profile = maybePromoteSpanStage(profile);
   setSpanProfile(profile);
+
+  u.settings.span.ms = profile.profileAdaptive.currentParams.exposureMs;
+  $("#spanMs").value = String(u.settings.span.ms);
 
   $("#spanResult").innerHTML = ok
     ? `<span style="color: var(--good); font-weight: 800;">buono:</span> ${Span.current}`
@@ -1189,20 +1281,22 @@ function spanEndSession(){
   Span.session.endedAt = nowIso();
   const acc = Span.tries ? (Span.correct/Span.tries) : null;
   const profile = getSpanProfile();
+  const c = profile.profileAdaptive.currentParams;
   Span.session.metrics = {
     accuracy: Number.isFinite(acc) ? acc : null,
     score: `${Span.correct}/${Span.tries}`,
     tries: Span.tries,
-    stage: profile.currentStage,
-    length: profile.currentLength,
+    stage: c.stage,
+    length: c.length,
+    exposureMs: c.exposureMs,
   };
   Span.session.notes = {
-    restartPoint: `Stage ${profile.currentStage} · ${profile.currentLength} caratteri`,
+    restartPoint: `Stage ${c.stage} · ${c.length} caratteri · ${c.exposureMs}ms`,
     best: `Stage ${profile.bestStageReached} · ${profile.bestLengthReached} caratteri`,
   };
   addSessionToUser(Span.session);
 
-  $("#spanResult").textContent = `Record: Stage ${profile.bestStageReached} · ${profile.bestLengthReached}. Ripartenza: Stage ${profile.currentStage} · ${profile.currentLength}.`;
+  $("#spanResult").textContent = `Record: Stage ${profile.bestStageReached} · ${profile.bestLengthReached}. Ripartenza: Stage ${c.stage} · ${c.length} (${c.exposureMs}ms).`;
   Span.session = null;
   Span.tries = 0;
   Span.correct = 0;
@@ -1416,7 +1510,8 @@ function fixStart(){
     if(Fix.index >= Fix.total){
       Fix.index = 0;
       Fix.lapsCompleted += 1;
-      fixSetCurrentMs(Fix.currentMs - 50);
+      const pctDrop = clamp(0.02 + Math.min(0.02, Fix.lapsCompleted * 0.005), 0.02, 0.04);
+      fixSetCurrentMs(Fix.currentMs * (1 - pctDrop));
       Fix.minMsReached = Math.min(Fix.minMsReached, Fix.currentMs);
     }
 
@@ -1465,8 +1560,11 @@ function fixStop(completed=false){
     const u = getActiveUser();
     if(!u) return;
     let prof = normalizeAdaptiveProfile(u.settings.fixation.profile, { holdMs: 600, targetSizePx: 24, distractorCount: 2, amplitude: 1.0, motionFlag: 0 });
-    const S = completed ? 1 : 0;
     const curr = prof.currentParams;
+    const baselineHold = clamp(Number(curr.holdMs) || 600, 300, 2200);
+    const minMsReached = clamp(Math.round(Fix.minMsReached || baselineHold), 50, 3000);
+    const progress = clamp((baselineHold - minMsReached) / baselineHold, 0, 1);
+    const S = completed ? clamp(0.7 + progress * 0.3, 0, 1) : clamp(progress * 0.35, 0, 0.35);
     const currItem = fixationItemRating(curr);
     const upd = updateGlickoLite({ R_user: prof.R_user, RD_user: prof.RD_user, R_item: currItem, S });
     prof.R_user = upd.R_user;
@@ -1748,6 +1846,7 @@ function bindReader(){
       const u = getActiveUser();
     if(!u) return;
       u.settings.reader = {
+        ...u.settings.reader,
         lang: $("#readerLang").value,
         mode: $("#readerMode").value,
         wpm: Number($("#readerWpm").value)||350,
@@ -1808,12 +1907,18 @@ function bindSpan(){
     $("#"+id).addEventListener("change", ()=>{
       spanApplyFont();
       const u = getActiveUser();
-    if(!u) return;
+      if(!u) return;
       const defaults = defaultUserSettings();
       u.settings = ensureObject(u.settings, JSON.parse(JSON.stringify(defaults)));
       u.settings.span = ensureObject(u.settings.span, JSON.parse(JSON.stringify(defaults.span)));
-      u.settings.span.ms = Number($("#spanMs").value)||800;
       u.settings.span.font = Number($("#spanFont").value)||110;
+      const prof = normalizeSpanProfile(u.settings.span.profile || {});
+      prof.profileAdaptive.currentParams = normalizeSpanParams({
+        ...prof.profileAdaptive.currentParams,
+        exposureMs: clamp(Number($("#spanMs").value) || prof.profileAdaptive.currentParams.exposureMs || 800, 80, 1200),
+      });
+      u.settings.span.profile = prof;
+      u.settings.span.ms = prof.profileAdaptive.currentParams.exposureMs;
       saveState();
     });
   });
