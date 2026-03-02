@@ -28,16 +28,26 @@ const OFFLINE_TEXTS = {
   ],
 };
 
-let READER_DB_CACHE = null;
 
-async function loadReaderDb(){
-  if(READER_DB_CACHE) return READER_DB_CACHE;
-  const res = await fetch(READER_DB_URL);
-  if(!res.ok) throw new Error("Database Lettura Veloce non disponibile");
-  const json = await res.json();
-  READER_DB_CACHE = validateReaderDb(json);
-  return READER_DB_CACHE;
-}
+
+const SAINTS_IT_TEXTS = [
+  {
+    title: "San Francesco d'Assisi",
+    text: "Francesco d'Assisi lasciò una vita agiata per seguire una scelta di povertà radicale. Il suo percorso spirituale mise al centro semplicità, fraternità e rispetto per ogni creatura. La tradizione racconta la sua capacità di parlare al cuore delle persone con parole dirette e concrete. Nel tempo è diventato un simbolo di pace, dialogo e attenzione ai più fragili."
+  },
+  {
+    title: "Santa Caterina da Siena",
+    text: "Caterina da Siena fu una figura centrale del Trecento italiano per la forza della sua testimonianza religiosa e civile. Attraverso lettere e incontri pubblici, incoraggiò riconciliazione e responsabilità personale. La sua spiritualità univa contemplazione e azione, con una forte cura per i malati e per i poveri. È ricordata per la chiarezza con cui difese la dignità della coscienza."
+  },
+  {
+    title: "San Giovanni Bosco",
+    text: "Giovanni Bosco dedicò la sua vita all'educazione dei giovani, specialmente quelli in difficoltà. Il suo metodo educativo puntava su fiducia, presenza costante e formazione integrale della persona. Fondò opere sociali e scuole professionali, offrendo opportunità concrete di crescita. Il suo esempio resta legato a un'idea di educazione capace di unire disciplina, affetto e speranza."
+  },
+  {
+    title: "Santa Teresa di Calcutta",
+    text: "Teresa di Calcutta è conosciuta per il servizio ai più poveri nelle periferie urbane. Con la sua comunità, promosse opere di assistenza per malati, anziani e persone senza dimora. Il suo stile era sobrio e orientato alla cura quotidiana, fatta di gesti semplici ripetuti con fedeltà. La sua figura è diventata un riferimento internazionale di carità concreta e prossimità umana."
+  }
+];
 
 const STOPWORDS = {
   it: new Set(["il","lo","la","i","gli","le","un","uno","una","di","a","da","in","su","per","tra","fra","e","o","che","del","della","dei","delle","al","allo","alla","ai","agli","alle","nel","nello","nella","nei","nelle","con","non","più","come","se"]),
@@ -372,28 +382,11 @@ async function getAdaptiveText(lang, minWords, source, customText=""){
     if(wordCount < 40) throw new Error("Incolla almeno 40 parole nel testo personalizzato.");
     return { title: "Testo personalizzato", text, sourceUrl: null, wordCount };
   }
-  if(source === "santi-db") {
-    try{
-      const db = await loadReaderDb();
-      const items = db.items.filter(it => typeof it?.text === "string" && wordsOf(it.text).length >= minWords);
-      const chosen = pick(items.length ? items : db.items);
-      const model = buildReaderRenderModel(chosen, 4);
-      if(model.questions.length < 4){
-        console.warn("Dataset con meno di 4 domande: fallback controllato attivo");
-      }
-      return {
-        title: model.title,
-        text: model.text,
-        sourceUrl: null,
-        wordCount: wordsOf(model.text).length,
-        quizQuestions: model.questions
-      };
-    }catch(err){
-      console.warn("Errore validazione dataset Lettura Veloce, fallback offline:", err);
-      const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
-      const text = t.join("\n\n");
-      return { title: "Offline (dataset fallback)", text, sourceUrl: null, wordCount: wordsOf(text).length, quizQuestions: [] };
-    }
+  if(source === "saints-it"){
+    const candidates = SAINTS_IT_TEXTS.filter(item => wordsOf(item.text).length >= minWords);
+    const pool = candidates.length ? candidates : SAINTS_IT_TEXTS;
+    const picked = pick(pool);
+    return { title: picked.title, text: picked.text, sourceUrl: null, wordCount: wordsOf(picked.text).length };
   }
   if(source === "offline"){
     const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
