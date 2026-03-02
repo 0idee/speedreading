@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "language": "it",
+  "items": [
+    {
+      "id": "kornelius_sipayung_001",
+      "title": "Kornelius Sipayung",
+      "text": "Kornelius Sipayung (Kabanjahe, 26 agosto 1970) è un arcivescovo cattolico indonesiano, dall'8 dicembre 2018 arcivescovo metropolita di Medan. Biografia. È nato il 26 agosto 1970 a Kabanjahe. Formazione e ministero sacerdotale. Dopo aver svolto il noviziato presso il monastero dei cappuccini di Pematang Siantar e aver studiato presso il seminario secondario Christus Sacerdos, ha proseguito gli studi presso il collegio di filosofia e teologia Santo Yohanes. Il 22 agosto 1998 ha emesso i voti perpetui come membro dell'Ordine dei frati minori cappuccini della provincia di Medan e ha ricevuto il sacramento dell'ordine l'11 dicembre 1999 dall'arcivescovo di Medan Alfred Gonti Pius Datubara. Nel 2002 si è trasferito a Roma per studiare teologia dogmatica presso la Pontificia Università Gregoriana e successivamente ha frequentato un corso di lingua inglese a Brisbane, in Australia. Al suo ritorno in Indonesia nel 2005 è diventato formatore presso il seminario del collegio dei cappuccini di Pematang Siantar e docente di teologia presso l'STFT Santo Yohanes Pematang Siantar fino al 2015, anno in cui è stato eletto ministro provinciale dell'Ordine dei cappuccini di Medan.",
+      "questions": [
+        { "prompt": "In quale città è nato Kornelius Sipayung?", "options": ["Jakarta", "Kabanjahe", "Medan", "Roma"], "correctIndex": 1 },
+        { "prompt": "In quale anno è nato?", "options": ["1968", "1970", "1975", "1980"], "correctIndex": 1 },
+        { "prompt": "Da quale data è arcivescovo metropolita di Medan?", "options": ["8 dicembre 2018", "11 dicembre 1999", "22 agosto 1998", "26 agosto 1970"], "correctIndex": 0 },
+        { "prompt": "Quale seminario secondario è citato nel testo?", "options": ["Christus Sacerdos", "San Carlo", "Sant'Agostino", "San Pietro"], "correctIndex": 0 },
+        { "prompt": "Presso quale collegio ha proseguito gli studi filosofico-teologici?", "options": ["Santo Yohanes", "Gregoriana", "Lateranense", "Urbaniana"], "correctIndex": 0 },
+        { "prompt": "In quale data ha emesso i voti perpetui?", "options": ["11 dicembre 1999", "22 agosto 1998", "8 dicembre 2018", "22 agosto 2005"], "correctIndex": 1 },
+        { "prompt": "In quale ordine religioso è indicato come membro?", "options": ["Gesuiti", "Frati minori cappuccini", "Domenicani", "Salesiani"], "correctIndex": 1 },
+        { "prompt": "Da chi ha ricevuto il sacramento dell'ordine?", "options": ["Alfred Gonti Pius Datubara", "Papa Francesco", "Kornelius Sipayung", "Santo Yohanes"], "correctIndex": 0 },
+        { "prompt": "In che anno si è trasferito a Roma?", "options": ["1998", "1999", "2002", "2005"], "correctIndex": 2 },
+        { "prompt": "Quale disciplina ha studiato a Roma?", "options": ["Diritto canonico", "Teologia dogmatica", "Storia medievale", "Filosofia morale"], "correctIndex": 1 },
+        { "prompt": "Quale università romana viene citata?", "options": ["Sapienza", "Pontificia Università Gregoriana", "Bocconi", "Tor Vergata"], "correctIndex": 1 },
+        { "prompt": "Dove ha frequentato un corso di lingua inglese?", "options": ["Sydney", "Brisbane", "Melbourne", "Perth"], "correctIndex": 1 },
+        { "prompt": "In quale paese si trova Brisbane?", "options": ["Australia", "Nuova Zelanda", "Indonesia", "Regno Unito"], "correctIndex": 0 },
+        { "prompt": "In quale anno è tornato in Indonesia?", "options": ["2000", "2002", "2005", "2010"], "correctIndex": 2 },
+        { "prompt": "Quale ruolo ha assunto al ritorno in Indonesia?", "options": ["Formatore presso il seminario dei cappuccini", "Sindaco di Medan", "Rettore universitario", "Nunzio apostolico"], "correctIndex": 0 },
+        { "prompt": "In quale città viene più volte citato il seminario dei cappuccini?", "options": ["Kabanjahe", "Pematang Siantar", "Bandung", "Surabaya"], "correctIndex": 1 },
+        { "prompt": "Fino a quale anno è stato docente presso l'STFT Santo Yohanes?", "options": ["2012", "2015", "2018", "2020"], "correctIndex": 1 },
+        { "prompt": "Quale incarico ha ottenuto nel 2015?", "options": ["Ministro provinciale dei cappuccini di Medan", "Rettore Gregoriana", "Vescovo di Roma", "Decano universitario"], "correctIndex": 0 },
+        { "prompt": "Quale parola è presente nel testo?", "options": ["ricevuto", "ricevata", "ricevente", "ricevibile"], "correctIndex": 0 },
+        { "prompt": "Quale parola NON è presente nel testo?", "options": ["Brisbane", "Kabanjahe", "Christus", "Venezia"], "correctIndex": 3 }
+      ]
+    }
+  ]
+}

@@ -22,10 +22,39 @@
         <select id="userSelect"></select>
       </label>
       <button class="btn" id="btnAddUser">+ Nuovo</button>
+      <button class="btn secondary" id="btnChangePassword" type="button">Cambia password</button>
+      <button class="btn secondary" id="btnForgotPassword" type="button">Recupera password</button>
       <button class="btn danger" id="btnDeleteUser" type="button">Elimina account</button>
       <button class="btn secondary" id="btnSettings">Impostazioni</button>
     </div>
   </header>
+
+
+  <section id="noAccountPanel" class="card hidden" style="margin:16px;">
+    <div class="card-head"><h2>Nessun account</h2></div>
+    <div class="card-body">
+      <p class="muted">Crea un account per iniziare. La password sarà richiesta quando cambi utente o elimini l'account.</p>
+      <div class="row gap">
+        <input id="newAccountName" type="text" placeholder="Nome account" />
+        <input id="newAccountEmail" type="email" placeholder="Email recupero" />
+        <input id="newAccountPassword" type="password" placeholder="Password (min 4)" />
+        <button class="btn" id="btnCreateFirstAccount" type="button">Crea account</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="loginGate" class="card hidden" style="margin:16px;">
+    <div class="card-head"><h2>Seleziona utente</h2></div>
+    <div class="card-body">
+      <p class="muted">Prima di usare l'app seleziona un utente registrato e inserisci la password.</p>
+      <div class="row gap">
+        <select id="loginUserSelect"></select>
+        <input id="loginPassword" type="password" placeholder="Password" />
+        <button class="btn" id="btnLoginUser" type="button">Entra</button>
+      </div>
+      <div class="muted small" id="loginStatus">—</div>
+    </div>
+  </section>
 
   <main class="layout">
     <aside class="dashboard-ribbon">
@@ -139,6 +168,7 @@
                   <label class="field">
                     <span>Sorgente</span>
                     <select id="readerSource">
+                      <option value="santi-db">Database santi (IT)</option>
                       <option value="wiki">Wikipedia (random)</option>
                       <option value="saints-it">Database santi (IT)</option>
                       <option value="offline">Offline (fallback)</option>
@@ -294,6 +324,7 @@
                   <label class="field">
                     <span>Sorgente testo</span>
                     <select id="fixSource">
+                      <option value="santi-db">Database santi (IT)</option>
                       <option value="wiki">Wikipedia (random)</option>
                       <option value="saints-it">Database santi (IT)</option>
                       <option value="offline">Offline (fallback)</option>
