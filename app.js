@@ -25,6 +25,27 @@ const OFFLINE_TEXTS = {
   ],
 };
 
+
+
+const SAINTS_IT_TEXTS = [
+  {
+    title: "San Francesco d'Assisi",
+    text: "Francesco d'Assisi lasciò una vita agiata per seguire una scelta di povertà radicale. Il suo percorso spirituale mise al centro semplicità, fraternità e rispetto per ogni creatura. La tradizione racconta la sua capacità di parlare al cuore delle persone con parole dirette e concrete. Nel tempo è diventato un simbolo di pace, dialogo e attenzione ai più fragili."
+  },
+  {
+    title: "Santa Caterina da Siena",
+    text: "Caterina da Siena fu una figura centrale del Trecento italiano per la forza della sua testimonianza religiosa e civile. Attraverso lettere e incontri pubblici, incoraggiò riconciliazione e responsabilità personale. La sua spiritualità univa contemplazione e azione, con una forte cura per i malati e per i poveri. È ricordata per la chiarezza con cui difese la dignità della coscienza."
+  },
+  {
+    title: "San Giovanni Bosco",
+    text: "Giovanni Bosco dedicò la sua vita all'educazione dei giovani, specialmente quelli in difficoltà. Il suo metodo educativo puntava su fiducia, presenza costante e formazione integrale della persona. Fondò opere sociali e scuole professionali, offrendo opportunità concrete di crescita. Il suo esempio resta legato a un'idea di educazione capace di unire disciplina, affetto e speranza."
+  },
+  {
+    title: "Santa Teresa di Calcutta",
+    text: "Teresa di Calcutta è conosciuta per il servizio ai più poveri nelle periferie urbane. Con la sua comunità, promosse opere di assistenza per malati, anziani e persone senza dimora. Il suo stile era sobrio e orientato alla cura quotidiana, fatta di gesti semplici ripetuti con fedeltà. La sua figura è diventata un riferimento internazionale di carità concreta e prossimità umana."
+  }
+];
+
 const STOPWORDS = {
   it: new Set(["il","lo","la","i","gli","le","un","uno","una","di","a","da","in","su","per","tra","fra","e","o","che","del","della","dei","delle","al","allo","alla","ai","agli","alle","nel","nello","nella","nei","nelle","con","non","più","come","se"]),
   en: new Set(["the","a","an","of","to","in","on","for","and","or","that","with","as","at","by","from","is","are","was","were","be","been","this","these","those","it","its","not","more","than"])
@@ -331,6 +352,12 @@ async function getAdaptiveText(lang, minWords, source, customText=""){
     if(wordCount < 40) throw new Error("Incolla almeno 40 parole nel testo personalizzato.");
     return { title: "Testo personalizzato", text, sourceUrl: null, wordCount };
   }
+  if(source === "saints-it"){
+    const candidates = SAINTS_IT_TEXTS.filter(item => wordsOf(item.text).length >= minWords);
+    const pool = candidates.length ? candidates : SAINTS_IT_TEXTS;
+    const picked = pick(pool);
+    return { title: picked.title, text: picked.text, sourceUrl: null, wordCount: wordsOf(picked.text).length };
+  }
   if(source === "offline"){
     const t = OFFLINE_TEXTS[lang] || OFFLINE_TEXTS.it;
     const text = t.join("\n\n");
@@ -369,13 +396,7 @@ function setActiveUser(userId){
 function addUser(name){
   const clean = (name || "").trim();
   if(!clean) return;
-  const u = {
-    id: uid(),
-    name: clean,
-    createdAt: nowIso(),
-    sessions: [],
-    settings: JSON.parse(JSON.stringify(defaultState().users[0].settings)),
-  };
+  const u = createUserRecord(clean);
   STATE.users.push(u);
   STATE.activeUserId = u.id;
   saveState();
@@ -390,14 +411,24 @@ function wipeUser(userId){
   rerenderAll();
 }
 
-function deleteUser(userId){
+function createUserRecord(name){
+  return {
+    id: uid(),
+    name: (name || "Nuovo utente").trim() || "Nuovo utente",
+    createdAt: nowIso(),
+    sessions: [],
+    settings: JSON.parse(JSON.stringify(defaultState().users[0].settings)),
+  };
+}
+
+function deleteUser(userId, replacementName){
   const idx = STATE.users.findIndex(x=>x.id===userId);
   if(idx === -1) return;
   STATE.users.splice(idx, 1);
   if(!STATE.users.length){
-    const fresh = defaultState();
-    STATE.users = fresh.users;
-    STATE.activeUserId = fresh.activeUserId;
+    const replacement = createUserRecord(replacementName);
+    STATE.users = [replacement];
+    STATE.activeUserId = replacement.id;
   } else if(STATE.activeUserId === userId){
     STATE.activeUserId = STATE.users[0].id;
   }
@@ -1337,19 +1368,14 @@ function fixStart(){
     }
 
     fixActivate(Fix.index);
-    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri rimasti: ${Fix.lapsLeft} • ${Math.round(Fix.currentMs)}ms`;
+    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri completati: ${Fix.lapsCompleted} • ${Math.round(Fix.currentMs)}ms`;
 
     Fix.index += 1;
     if(Fix.index >= Fix.total){
       Fix.index = 0;
-      Fix.lapsLeft -= 1;
       Fix.lapsCompleted += 1;
-      fixSetCurrentMs(Fix.currentMs - 10);
+      fixSetCurrentMs(Fix.currentMs - 50);
       Fix.minMsReached = Math.min(Fix.minMsReached, Fix.currentMs);
-      if(Fix.lapsLeft <= 0){
-        fixStop(true);
-        return;
-      }
     }
 
     Fix.timerId = setTimeout(tick, Math.max(50, Math.round(Fix.currentMs)));
@@ -1512,6 +1538,15 @@ function bindTopbar(){
   });
   $("#btnDeleteUser").addEventListener("click", ()=>{
     const u = getActiveUser();
+    if(!u) return;
+    if(STATE.users.length === 1){
+      const replacementName = prompt("Stai eliminando l'ultimo account. Inserisci il nome del nuovo utente:", "Nuovo utente");
+      if(replacementName === null) return;
+      if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
+        deleteUser(u.id, replacementName);
+      }
+      return;
+    }
     if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
       deleteUser(u.id);
     }
