@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { expectedScore, updateGlickoLite, selectCandidate, targetItemRating } from './adaptive-glicko.js';
+import { expectedScore, updateGlickoLite, selectCandidate, selectDirectionalCandidate, targetItemRating, maxDirectionalSteps } from './adaptive-glicko.js';
 
 test('expectedScore decreases as R_item increases', () => {
   const e1 = expectedScore(1000, 200, 900);
@@ -33,4 +33,21 @@ test('targetItemRating lowers target by RD margin', () => {
   const tLow = targetItemRating(1000, 100);
   const tHigh = targetItemRating(1000, 300);
   assert.ok(tHigh < tLow);
+});
+
+
+test('selectDirectionalCandidate respects harder/easier constraint', () => {
+  const itemRating = (x) => x.r;
+  const current = { r: 1000 };
+  const candidates = [{ r: 970 }, { r: 1010 }, { r: 1040 }];
+  const harder = selectDirectionalCandidate({ currentParams: current, candidates, itemRating, targetRating: 1020, direction: 'harder' });
+  const easier = selectDirectionalCandidate({ currentParams: current, candidates, itemRating, targetRating: 980, direction: 'easier' });
+  assert.ok(harder.r >= 1000);
+  assert.ok(easier.r <= 1000);
+});
+
+test('maxDirectionalSteps clamps by RD and attempts', () => {
+  assert.equal(maxDirectionalSteps({ RD_user: 230, attempts_count: 20 }), 1);
+  assert.equal(maxDirectionalSteps({ RD_user: 100, attempts_count: 20 }), 2);
+  assert.equal(maxDirectionalSteps({ RD_user: 100, attempts_count: 2 }), 1);
 });

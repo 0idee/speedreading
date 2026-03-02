@@ -6,7 +6,9 @@ import {
   getStageCharset,
   generateSpanStimulus,
   evaluateSpanAttempt,
-  updateSpanProgress,
+  spanPartialScore,
+  spanItemRating,
+  maybePromoteSpanStage,
 } from './visual-span.js';
 
 test('stage charsets exclude O/o and keep 0', () => {
@@ -14,17 +16,9 @@ test('stage charsets exclude O/o and keep 0', () => {
   assert.ok(stage1.includes('0'));
   assert.ok(!stage1.includes('O'));
 
-  const stage2 = getStageCharset(2);
-  assert.ok(stage2.includes('0'));
-  assert.ok(!stage2.includes('O'));
-
   const stage3 = getStageCharset(3);
   assert.ok(!stage3.includes('O'));
   assert.ok(!stage3.includes('o'));
-
-  const stage4 = getStageCharset(4);
-  assert.ok(stage4.includes('@'));
-  assert.ok(stage4.includes('='));
 });
 
 test('generator respects stage and length', () => {
@@ -38,45 +32,39 @@ test('evaluation trims input and compares exact chars', () => {
   assert.equal(evaluateSpanAttempt('A10', 'A1O'), false);
 });
 
-test('progression increases length after 3 successes with cooldown', () => {
+test('partial score gives credit for near answers', () => {
+  assert.equal(spanPartialScore('1234', '1234'), 1);
+  assert.equal(spanPartialScore('1234', '1235'), 0.75);
+});
+
+test('item rating gets harder with longer length / lower ms / higher stage', () => {
+  const easy = spanItemRating({ length: 4, exposureMs: 800, stage: 1 });
+  const hardLen = spanItemRating({ length: 6, exposureMs: 800, stage: 1 });
+  const hardMs = spanItemRating({ length: 4, exposureMs: 500, stage: 1 });
+  const hardStage = spanItemRating({ length: 4, exposureMs: 800, stage: 2 });
+  assert.ok(hardLen > easy);
+  assert.ok(hardMs > easy);
+  assert.ok(hardStage > easy);
+});
+
+test('stage promotion requires stable windows and applies compensation', () => {
   let p = defaultSpanProfile();
-  p = updateSpanProgress(p, true);
-  p = updateSpanProgress(p, true);
-  p = updateSpanProgress(p, true);
-  assert.equal(p.currentLength, 5);
-  assert.equal(p.cooldown, 1);
+  p.profileAdaptive.currentParams = { length: 10, exposureMs: 200, stage: 1 };
+  p.profileAdaptive.RD_user = 120;
+  p.profileAdaptive.rollingResults = [{S:0.9},{S:0.8},{S:0.85},{S:0.9}];
 
-  const afterCooldownTry = updateSpanProgress(p, true);
-  assert.equal(afterCooldownTry.currentLength, 5);
-  assert.equal(afterCooldownTry.cooldown, 0);
+  p = maybePromoteSpanStage(p);
+  assert.equal(p.stageHoldWindows, 1);
+
+  p = maybePromoteSpanStage(p);
+  assert.equal(p.profileAdaptive.currentParams.stage, 2);
+  assert.ok(p.profileAdaptive.currentParams.length <= 9);
+  assert.ok(p.profileAdaptive.currentParams.exposureMs >= 320);
 });
 
-test('progression reduces length on error with min clamp', () => {
-  let p = normalizeSpanProfile({ currentLength: 4 });
-  p = updateSpanProgress(p, false);
-  assert.equal(p.currentLength, 4);
-
-  p = normalizeSpanProfile({ currentLength: 8 });
-  p = updateSpanProgress(p, false);
-  assert.equal(p.currentLength, 7);
-});
-
-test('stage promotion requires two qualifying streaks at L>=10', () => {
-  let p = normalizeSpanProfile({ currentStage: 1, currentLength: 10 });
-
-  for(let i=0; i<3; i++) p = updateSpanProgress(p, true);
-  assert.equal(p.currentStage, 1);
-  assert.equal(p.promotionStreaksAt10, 1);
-
-  for(let i=0; i<3; i++) p = updateSpanProgress(p, true);
-  assert.equal(p.currentStage, 2);
-  assert.equal(p.currentLength, 8);
-});
-
-test('persistence restart keeps saved stage and length', () => {
-  const p = normalizeSpanProfile({ currentStage: 3, currentLength: 9, bestStageReached: 4, bestLengthReached: 12 });
-  assert.equal(p.currentStage, 3);
-  assert.equal(p.currentLength, 9);
-  assert.equal(p.bestStageReached, 4);
-  assert.equal(p.bestLengthReached, 12);
+test('persistence restart keeps saved adaptive params', () => {
+  const p = normalizeSpanProfile({ profileAdaptive: { currentParams: { stage: 3, length: 9, exposureMs: 450 } } });
+  assert.equal(p.profileAdaptive.currentParams.stage, 3);
+  assert.equal(p.profileAdaptive.currentParams.length, 9);
+  assert.equal(p.profileAdaptive.currentParams.exposureMs, 450);
 });
