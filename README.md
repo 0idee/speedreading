@@ -34,3 +34,9 @@ Lo stato è salvato in `localStorage` sotto `speedread_trainer_v2_state`, nel pr
 ```bash
 node --test visual-span.test.js adaptive-glicko.test.js elo.test.js
 ```
+
+## Gestione account
+
+- Puoi eliminare l'utente corrente con **Elimina account**.
+- Se stai eliminando l'ultimo account, l'app ti chiede il nome del nuovo utente e ricrea subito un profilo pulito (utile se hai perso credenziali o vuoi ripartire).
+- In alternativa, dal tab **Dati** usa **Azzera tutti i dati** per resettare completamente l'app locale.

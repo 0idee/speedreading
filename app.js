@@ -369,13 +369,7 @@ function setActiveUser(userId){
 function addUser(name){
   const clean = (name || "").trim();
   if(!clean) return;
-  const u = {
-    id: uid(),
-    name: clean,
-    createdAt: nowIso(),
-    sessions: [],
-    settings: JSON.parse(JSON.stringify(defaultState().users[0].settings)),
-  };
+  const u = createUserRecord(clean);
   STATE.users.push(u);
   STATE.activeUserId = u.id;
   saveState();
@@ -390,14 +384,24 @@ function wipeUser(userId){
   rerenderAll();
 }
 
-function deleteUser(userId){
+function createUserRecord(name){
+  return {
+    id: uid(),
+    name: (name || "Nuovo utente").trim() || "Nuovo utente",
+    createdAt: nowIso(),
+    sessions: [],
+    settings: JSON.parse(JSON.stringify(defaultState().users[0].settings)),
+  };
+}
+
+function deleteUser(userId, replacementName){
   const idx = STATE.users.findIndex(x=>x.id===userId);
   if(idx === -1) return;
   STATE.users.splice(idx, 1);
   if(!STATE.users.length){
-    const fresh = defaultState();
-    STATE.users = fresh.users;
-    STATE.activeUserId = fresh.activeUserId;
+    const replacement = createUserRecord(replacementName);
+    STATE.users = [replacement];
+    STATE.activeUserId = replacement.id;
   } else if(STATE.activeUserId === userId){
     STATE.activeUserId = STATE.users[0].id;
   }
@@ -1337,19 +1341,14 @@ function fixStart(){
     }
 
     fixActivate(Fix.index);
-    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri rimasti: ${Fix.lapsLeft} • ${Math.round(Fix.currentMs)}ms`;
+    $("#fixProgress").textContent = `${Fix.index+1} / ${Fix.total} • giri completati: ${Fix.lapsCompleted} • ${Math.round(Fix.currentMs)}ms`;
 
     Fix.index += 1;
     if(Fix.index >= Fix.total){
       Fix.index = 0;
-      Fix.lapsLeft -= 1;
       Fix.lapsCompleted += 1;
-      fixSetCurrentMs(Fix.currentMs - 10);
+      fixSetCurrentMs(Fix.currentMs - 50);
       Fix.minMsReached = Math.min(Fix.minMsReached, Fix.currentMs);
-      if(Fix.lapsLeft <= 0){
-        fixStop(true);
-        return;
-      }
     }
 
     Fix.timerId = setTimeout(tick, Math.max(50, Math.round(Fix.currentMs)));
@@ -1512,6 +1511,15 @@ function bindTopbar(){
   });
   $("#btnDeleteUser").addEventListener("click", ()=>{
     const u = getActiveUser();
+    if(!u) return;
+    if(STATE.users.length === 1){
+      const replacementName = prompt("Stai eliminando l'ultimo account. Inserisci il nome del nuovo utente:", "Nuovo utente");
+      if(replacementName === null) return;
+      if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
+        deleteUser(u.id, replacementName);
+      }
+      return;
+    }
     if(confirm(`Vuoi eliminare definitivamente l'account "${u.name}"?`)){
       deleteUser(u.id);
     }
